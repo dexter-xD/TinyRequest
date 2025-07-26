@@ -169,7 +169,9 @@ void AddHttpRequestHeader(HttpRequest* request, const char* key, const char* val
 
     char** new_headers = realloc(request->headers, (request->header_count + 1) * sizeof(char*));
     if (!new_headers) {
+        SetHttpError(HTTP_ERROR_OUT_OF_MEMORY, "Failed to allocate memory for header");
         return;
+
     }
 
     request->headers = new_headers;
@@ -291,7 +293,7 @@ HttpResponse* SendHttpRequest(HttpRequest* request) {
 
     request_in_progress = 1;  
     printf("DEBUG: Request marked as in progress\n");
-
+    
     ClearHttpError();
 
     if (!request || !request->url) {
@@ -302,7 +304,7 @@ HttpResponse* SendHttpRequest(HttpRequest* request) {
     }
 
     printf("DEBUG: Request URL: %s\n", request->url);
-
+    
     if (!ValidateUrl(request->url)) {
         printf("DEBUG: URL validation failed\n");
         SetHttpError(HTTP_ERROR_INVALID_URL, "Invalid URL format");
@@ -364,6 +366,7 @@ HttpResponse* SendHttpRequest(HttpRequest* request) {
             curl_easy_setopt(curl, CURLOPT_POST, 1L);
         } else if (strcmp(request->method, "PUT") == 0) {
             curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PUT");
+
         } else if (strcmp(request->method, "DELETE") == 0) {
             curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "DELETE");
         }
@@ -371,7 +374,7 @@ HttpResponse* SendHttpRequest(HttpRequest* request) {
     }
 
     if (request->body && strlen(request->body) > 0) {
-        printf("DEBUG: Setting request body: [%s]\n", request->body);
+        printf("DEBUG: Setting request body: %s\n", request->body);
         printf("DEBUG: Request body length: %zu\n", strlen(request->body));
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request->body);
         curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, strlen(request->body));
@@ -382,7 +385,7 @@ HttpResponse* SendHttpRequest(HttpRequest* request) {
         for (int i = 0; i < request->header_count; i++) {
             if (request->headers[i]) {
                 headers = curl_slist_append(headers, request->headers[i]);
-            }
+           }
         }
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     }
@@ -436,6 +439,7 @@ HttpResponse* SendHttpRequest(HttpRequest* request) {
         SetHttpError(error_code, error_msg);
 
         if (response_buffer.buffer) {
+
             FreeStringBuffer(response_buffer.buffer);
         }
         if (header_buffer.headers) {
@@ -458,7 +462,7 @@ HttpResponse* SendHttpRequest(HttpRequest* request) {
     }
 
     if (response_buffer.buffer) {
-        response->body = StringBufferDetach(response_buffer.buffer);
+       response->body = StringBufferDetach(response_buffer.buffer);
 
         if (response->body) {
             size_t body_len = strlen(response->body);
@@ -480,7 +484,7 @@ HttpResponse* SendHttpRequest(HttpRequest* request) {
                     char* trimmed = response->body;
                     while (*trimmed == ' ' || *trimmed == '\t' || *trimmed == '\n') trimmed++;
 
-                    if (*trimmed == '{' || *trimmed == '[') {
+                   if (*trimmed == '{' || *trimmed == '[') {
 
                         int brace_count = 0;
                         int bracket_count = 0;
@@ -512,7 +516,7 @@ HttpResponse* SendHttpRequest(HttpRequest* request) {
                                 }
                             }
                         }
-
+                       
                         if (brace_count > 0 || bracket_count > 0) {
                             printf("DEBUG: JSON appears incomplete (braces: %d, brackets: %d), attempting to fix\n", brace_count, bracket_count);
 
@@ -637,6 +641,7 @@ AsyncHttpHandle* SendHttpRequestAsync(HttpRequest* request) {
         return NULL;
     }
 
+
     printf("DEBUG: SendHttpRequestAsync - Async handle created\n");
 
     handle->curl_handle = NULL;
@@ -644,6 +649,7 @@ AsyncHttpHandle* SendHttpRequestAsync(HttpRequest* request) {
     handle->response = NULL;
     handle->state = ASYNC_REQUEST_PENDING;
     handle->error_message[0] = '\0';
+
     handle->start_time = (double)clock() / CLOCKS_PER_SEC;
     handle->cancelled = 0;
 
@@ -653,7 +659,7 @@ AsyncHttpHandle* SendHttpRequestAsync(HttpRequest* request) {
     handle->state = ASYNC_REQUEST_ERROR;
     strcpy(handle->error_message, "libcurl not available");
     SetHttpError(HTTP_ERROR_NETWORK_FAILURE, "libcurl not available");
-    return handle;
+   return handle;
 #else
 
     handle->response = SendHttpRequest(request);
@@ -662,14 +668,17 @@ AsyncHttpHandle* SendHttpRequestAsync(HttpRequest* request) {
         handle->state = ASYNC_REQUEST_COMPLETED;
     } else {
         handle->state = ASYNC_REQUEST_ERROR;
+       
 
         HttpError last_err = GetLastHttpError();
+
         if (last_err.code != HTTP_ERROR_NONE) {
             strncpy(handle->error_message, last_err.message, sizeof(handle->error_message) - 1);
             handle->error_message[sizeof(handle->error_message) - 1] = '\0';
         } else {
             strcpy(handle->error_message, "HTTP request failed");
         }
+
     }
 
     return handle;

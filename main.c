@@ -64,7 +64,7 @@ void InitializeApplication(AppState* app) {
     InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_TITLE);
 
     Image icon = LoadImage("assets/icon.bmp");
-    if (icon.data && icon.width > 0 && icon.height > 0) {
+    if (icon.data != NULL && icon.width > 0 && icon.height > 0) {
         printf("Icon loaded: %dx%d, mipmaps=%d, format=%d\n", icon.width, icon.height, icon.mipmaps, icon.format);
         SetWindowIcon(icon);
         printf("SetWindowIcon called successfully.\n");
@@ -255,8 +255,11 @@ void UpdateApplication(AppState* app) {
                                 printf("DEBUG: Body set (original length: %zu, processed length: %zu)\n", 
                                        strlen(app->body_buffer), strlen(processed_body));
                                 free(processed_body);
-                            } else {
 
+                            } else {
+                                ReportGeneralError(app->error_handler, ERROR_LEVEL_WARNING,
+                                                    "Failed to process body escape sequences.  Using original body.");
+                                
                                 SetHttpRequestBody(request, app->body_buffer);
                                 printf("DEBUG: Body set without processing (length: %zu)\n", strlen(app->body_buffer));
                             }
@@ -278,6 +281,8 @@ void UpdateApplication(AppState* app) {
                         printf("DEBUG: Original body buffer: [%s]\n", app->body_buffer);
                         char* processed_body = ProcessBodyEscapeSequences(app->body_buffer);
                         if (processed_body) {
+
+
                             printf("DEBUG: Processed body: [%s]\n", processed_body);
                             SetHttpRequestBody(request, processed_body);
                             printf("DEBUG: Body set (original length: %zu, processed length: %zu)\n", 
@@ -285,6 +290,9 @@ void UpdateApplication(AppState* app) {
                             free(processed_body);
                         } else {
                             SetHttpRequestBody(request, app->body_buffer);
+                            ReportGeneralError(app->error_handler, ERROR_LEVEL_WARNING,
+                                                    "Failed to process body escape sequences.  Using original body.");
+
                             printf("DEBUG: Body set without processing (length: %zu)\n", strlen(app->body_buffer));
                         }
                     }
@@ -304,10 +312,14 @@ void UpdateApplication(AppState* app) {
                                     char* value = colon_pos + 1;
                                     while (*value == ' ' || *value == '\t') value++;
 
-                                    AddHttpRequestHeader(request, key, value);
+                                    char* key_copy = strdup(key);
+                                    char* value_copy = strdup(value);
+
+                                    AddHttpRequestHeader(request, key_copy, value_copy);
                                     printf("DEBUG: Added header: %s: %s\n", key, value);
                                     free(key);
                                 }
+
                             }
                         }
                     }
