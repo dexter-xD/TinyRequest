@@ -69,10 +69,8 @@ void RenderJsonWithHighlighting(Rectangle bounds, const char* json, GruvboxTheme
     int line_number = 0;
 
     while (*current) {
-        if (*current == '\n' || *current == '\0') {
-
+        if (*current == '\n') {
             if (current_pos.y >= bounds.y - 20 && current_pos.y <= bounds.y + bounds.height + 20) {
-
                 if (current > line_start) {
                     size_t line_len = current - line_start;
                     if (line_len > 0 && line_len < 2048) {
@@ -92,14 +90,26 @@ void RenderJsonWithHighlighting(Rectangle bounds, const char* json, GruvboxTheme
             current_pos.x = bounds.x + PADDING_SMALL;
             line_number++;
 
-            if (*current == '\n') {
-                current++;
-                line_start = current;
-            } else {
-                break;
-            }
+            current++;
+            line_start = current;
         } else {
             current++;
+        }
+    }
+    
+    if (current > line_start) {
+        if (current_pos.y >= bounds.y - 20 && current_pos.y <= bounds.y + bounds.height + 20) {
+            size_t line_len = current - line_start;
+            if (line_len > 0 && line_len < 2048) {
+                char* line_buffer = malloc(line_len + 1);
+                if (line_buffer) {
+                    strncpy(line_buffer, line_start, line_len);
+                    line_buffer[line_len] = '\0';
+
+                    RenderJsonLine(current_pos, line_buffer, theme);
+                    free(line_buffer);
+                }
+            }
         }
     }
 

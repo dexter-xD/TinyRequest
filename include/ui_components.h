@@ -5,14 +5,24 @@
 #include "theme.h"
 #include "http_client.h"
 
+typedef enum {
+    BODY_TYPE_JSON = 0,
+    BODY_TYPE_PLAIN_TEXT,
+    BODY_TYPE_COUNT
+} BodyType;
+
 void RenderMethodSelector(Rectangle bounds, int* selected_method, GruvboxTheme* theme);
 void RenderUrlInput(Rectangle bounds, char* url_buffer, int buffer_size, GruvboxTheme* theme);
 void RenderHeadersEditor(Rectangle bounds, char** headers, int* header_count, GruvboxTheme* theme);
-void RenderBodyEditor(Rectangle bounds, char* body_buffer, int buffer_size, GruvboxTheme* theme);
+void RenderBodyEditor(Rectangle bounds, char* body_buffer, int buffer_size, GruvboxTheme* theme, BodyType* body_type);
 void RenderResponseViewer(Rectangle bounds, HttpResponse* response, GruvboxTheme* theme);
 void RenderStatusBar(Rectangle bounds, const char* status_text, GruvboxTheme* theme);
 bool IsMethodDropdownOpen(void);
 void RenderMethodDropdownOverlay(Rectangle bounds, int* selected_method, GruvboxTheme* theme);
+
+bool IsBodyTypeDropdownOpen(void);
+void RenderBodyTypeDropdownOverlay(Rectangle bounds, BodyType* selected_body_type, GruvboxTheme* theme);
+void RenderBodyTypeSelector(Rectangle bounds, BodyType* selected_body_type, GruvboxTheme* theme);
 
 bool HandleMethodSelectorInput(Rectangle bounds, int* selected_method);
 bool HandleUrlInputField(Rectangle bounds, char* url_buffer, int buffer_size);
@@ -76,6 +86,9 @@ void RenderSuccessIcon(Vector2 position, float size, GruvboxTheme* theme);
 void RenderInfoIcon(Vector2 position, float size, GruvboxTheme* theme);
 
 void CleanupUIComponents(void);
+
+void DrawPaperPlaneIcon(Vector2 center, float size, Color color);
+char* ProcessBodyEscapeSequences(const char* input);
 
 struct MemoryPool;
 

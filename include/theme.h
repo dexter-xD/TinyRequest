@@ -36,7 +36,9 @@ extern const int PADDING_LARGE;
 
 typedef struct {
     Font regular;
+    Font bold;
     Font monospace;
+    Font title;
     bool fonts_loaded;
 } ThemeFonts;
 
@@ -46,5 +48,7 @@ void InitThemeFonts(void);
 void UnloadThemeFonts(void);
 Font GetUIFont(void);
 Font GetCodeFont(void);
+Font GetTitleFont(void);
+Font GetBoldFont(void);
 
 #endif

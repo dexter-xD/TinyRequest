@@ -14,6 +14,14 @@
 #define WINDOW_TITLE "TinyRequest"
 #define TARGET_FPS 60
 
+typedef enum {
+    TAB_PARAMS = 0,
+    TAB_BODY,
+    TAB_AUTH,
+    TAB_HEADERS,
+    TAB_COUNT
+} RequestTab;
+
 typedef struct {
     GruvboxTheme theme;
     bool should_close;
@@ -27,6 +35,8 @@ typedef struct {
     AsyncHttpHandle* current_request;
     bool request_in_progress;
     Texture2D logo_texture;
+    RequestTab active_tab;
+    BodyType body_type;
 } AppState;
 
 void InitializeApplication(AppState* app);
@@ -94,6 +104,8 @@ void InitializeApplication(AppState* app) {
 
     app->current_request = NULL;
     app->request_in_progress = false;
+    app->active_tab = TAB_BODY; 
+    app->body_type = BODY_TYPE_JSON; 
 
     SetWindowState(FLAG_WINDOW_RESIZABLE);
     SetExitKey(KEY_NULL);
@@ -171,9 +183,47 @@ void UpdateApplication(AppState* app) {
         }
     }
 
-    Rectangle send_button_bounds = {20, GetScreenHeight() - 20 - 40, 100, 35};
-    if (CheckCollisionPointRec(GetMousePosition(), send_button_bounds) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+    static double last_send_click_time = 0.0;
+
+    const int margin = 20;
+    const int card_padding = 18;
+    const int left_panel_width = GetScreenWidth() / 2 - margin - 10;
+    const int titlebar_h = 44;
+    const int component_spacing = 15;
+    int current_y = titlebar_h + component_spacing;
+    Rectangle request_card = {margin, current_y, left_panel_width, GetScreenHeight() - current_y - margin};
+    int req_inner_x = request_card.x + card_padding;
+    float button_w = 110;
+    float button_h = 38;
+
+    Rectangle send_button_bounds = {req_inner_x, request_card.y + request_card.height - button_h - card_padding, button_w, button_h};
+    bool send_button_hovered = CheckCollisionPointRec(GetMousePosition(), send_button_bounds);
+    bool send_button_clicked = send_button_hovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+
+    double current_time = GetTime();
+    if (send_button_clicked && (current_time - last_send_click_time) > 1.0) {  
+        last_send_click_time = current_time;
         printf("DEBUG: Send button clicked\n");
+
+        printf("DEBUG: Forcing complete state cleanup\n");
+
+        if (app->current_request) {
+            printf("DEBUG: Force cancelling existing request\n");
+            CancelAsyncRequest(app->current_request);
+            FreeAsyncHandle(app->current_request);
+            app->current_request = NULL;
+        }
+
+        if (app->last_response) {
+            printf("DEBUG: Force cleanup of previous response\n");
+            FreeHttpResponse(app->last_response);
+            app->last_response = NULL;
+        }
+
+        app->request_in_progress = false;
+
+        printf("DEBUG: State cleanup complete, proceeding with request\n");
+
         if (!app->request_in_progress) {
             printf("DEBUG: Not in progress, validating inputs\n");
 
@@ -194,9 +244,49 @@ void UpdateApplication(AppState* app) {
                     SetHttpRequestMethod(request, GetHttpMethodString(app->selected_method));
                     printf("DEBUG: Method set to: %s\n", GetHttpMethodString(app->selected_method));
 
-                    if (strlen(app->body_buffer) > 0) {
-                        SetHttpRequestBody(request, app->body_buffer);
-                        printf("DEBUG: Body set (length: %zu)\n", strlen(app->body_buffer));
+                    if (app->selected_method == HTTP_POST || app->selected_method == HTTP_PUT) {
+                        if (strlen(app->body_buffer) > 0) {
+
+                            printf("DEBUG: Original body buffer: [%s]\n", app->body_buffer);
+                            char* processed_body = ProcessBodyEscapeSequences(app->body_buffer);
+                            if (processed_body) {
+                                printf("DEBUG: Processed body: [%s]\n", processed_body);
+                                SetHttpRequestBody(request, processed_body);
+                                printf("DEBUG: Body set (original length: %zu, processed length: %zu)\n", 
+                                       strlen(app->body_buffer), strlen(processed_body));
+                                free(processed_body);
+                            } else {
+
+                                SetHttpRequestBody(request, app->body_buffer);
+                                printf("DEBUG: Body set without processing (length: %zu)\n", strlen(app->body_buffer));
+                            }
+                        } else {
+
+                            SetHttpRequestBody(request, "{}");
+                            printf("DEBUG: Added default empty JSON body for POST request\n");
+                        }
+
+                        if (app->body_type == BODY_TYPE_JSON) {
+                            AddHttpRequestHeader(request, "Content-Type", "application/json");
+                            printf("DEBUG: Added Content-Type: application/json header\n");
+                        } else {
+                            AddHttpRequestHeader(request, "Content-Type", "text/plain");
+                            printf("DEBUG: Added Content-Type: text/plain header\n");
+                        }
+                    } else if (strlen(app->body_buffer) > 0) {
+
+                        printf("DEBUG: Original body buffer: [%s]\n", app->body_buffer);
+                        char* processed_body = ProcessBodyEscapeSequences(app->body_buffer);
+                        if (processed_body) {
+                            printf("DEBUG: Processed body: [%s]\n", processed_body);
+                            SetHttpRequestBody(request, processed_body);
+                            printf("DEBUG: Body set (original length: %zu, processed length: %zu)\n", 
+                                   strlen(app->body_buffer), strlen(processed_body));
+                            free(processed_body);
+                        } else {
+                            SetHttpRequestBody(request, app->body_buffer);
+                            printf("DEBUG: Body set without processing (length: %zu)\n", strlen(app->body_buffer));
+                        }
                     }
 
                     printf("DEBUG: Adding %d headers\n", app->header_count);
@@ -290,9 +380,13 @@ void RenderApplication(AppState* app) {
     }
 
     const char* title_text = "TinyRequest";
-    Vector2 title_size = MeasureTextEx(GetUIFont(), title_text, FONT_SIZE_LARGE, 1);
+    int title_font_size = FONT_SIZE_LARGE + 4;
+    Vector2 title_size = MeasureTextEx(GetTitleFont(), title_text, title_font_size, 1.0f);
     Vector2 title_pos = {margin + logo_w + 12, (titlebar_h - title_size.y) / 2};
-    DrawTextEx(GetUIFont(), title_text, title_pos, FONT_SIZE_LARGE, 1, app->theme.fg0);
+
+    Vector2 shadow_pos = {title_pos.x + 1, title_pos.y + 1};
+    DrawTextEx(GetTitleFont(), title_text, shadow_pos, title_font_size, 1.0f, Fade(app->theme.bg0, 0.6f));
+    DrawTextEx(GetTitleFont(), title_text, title_pos, title_font_size, 1.0f, app->theme.fg0);
 
     int btn_w = 38, btn_h = 32, btn_gap = 8;
     int btn_y = (titlebar_h - btn_h) / 2;
@@ -314,19 +408,47 @@ void RenderApplication(AppState* app) {
     DrawRectangleLinesEx(btn_max, 2, app->theme.gray);
     DrawRectangleLinesEx(btn_close, 2, app->theme.gray);
 
-    DrawLine(btn_min.x + 10, btn_min.y + btn_h - 12, btn_min.x + btn_w - 10, btn_min.y + btn_h - 12, app->theme.fg1);
+    float min_line_width = btn_w * 0.5f;
+    float min_line_thickness = 2.0f;
+    Vector2 min_center = {btn_min.x + btn_w/2, btn_min.y + btn_h/2};
+    DrawRectangle(min_center.x - min_line_width/2, min_center.y - min_line_thickness/2, 
+                  min_line_width, min_line_thickness, min_hover ? app->theme.fg0 : app->theme.fg1);
 
+    float max_size = btn_w * 0.45f;
+    Vector2 max_center = {btn_max.x + btn_w/2, btn_max.y + btn_h/2};
     if (IsWindowFullscreen()) {
 
-        DrawRectangleLines(btn_max.x + 12, btn_max.y + 10, btn_w - 24, btn_h - 20, app->theme.fg1);
-        DrawLine(btn_max.x + 12, btn_max.y + 10, btn_max.x + btn_w - 12, btn_max.y + btn_h - 20, app->theme.fg1);
+        float offset = 3;
+        DrawRectangleLines(max_center.x - max_size/2 + offset, max_center.y - max_size/2 - offset, 
+                          max_size - offset, max_size - offset, max_hover ? app->theme.fg0 : app->theme.fg1);
+        DrawRectangleLines(max_center.x - max_size/2, max_center.y - max_size/2 + offset, 
+                          max_size - offset, max_size - offset, max_hover ? app->theme.fg0 : app->theme.fg1);
     } else {
 
-        DrawRectangleLines(btn_max.x + 10, btn_max.y + 8, btn_w - 20, btn_h - 16, app->theme.fg1);
+        DrawRectangleLines(max_center.x - max_size/2, max_center.y - max_size/2, 
+                          max_size, max_size, max_hover ? app->theme.fg0 : app->theme.fg1);
     }
 
-    DrawLine(btn_close.x + 10, btn_close.y + 10, btn_close.x + btn_w - 10, btn_close.y + btn_h - 10, WHITE);
-    DrawLine(btn_close.x + btn_w - 10, btn_close.y + 10, btn_close.x + 10, btn_close.y + btn_h - 10, WHITE);
+    float close_size = btn_w * 0.4f;
+    Vector2 close_center = {btn_close.x + btn_w/2, btn_close.y + btn_h/2};
+    float close_thickness = 2.0f;
+    Color close_color = close_hover ? WHITE : app->theme.fg1;
+
+    Vector2 x1_start = {close_center.x - close_size/2, close_center.y - close_size/2};
+    Vector2 x1_end = {close_center.x + close_size/2, close_center.y + close_size/2};
+    Vector2 x2_start = {close_center.x + close_size/2, close_center.y - close_size/2};
+    Vector2 x2_end = {close_center.x - close_size/2, close_center.y + close_size/2};
+
+    for (int i = -1; i <= 1; i++) {
+        for (int j = -1; j <= 1; j++) {
+            if (abs(i) + abs(j) <= 1) { 
+                DrawLineV((Vector2){x1_start.x + i, x1_start.y + j}, 
+                         (Vector2){x1_end.x + i, x1_end.y + j}, close_color);
+                DrawLineV((Vector2){x2_start.x + i, x2_start.y + j}, 
+                         (Vector2){x2_end.x + i, x2_end.y + j}, close_color);
+            }
+        }
+    }
 
     static bool is_maximized = false;
     static Vector2 prev_win_pos = {0};
@@ -397,9 +519,6 @@ void RenderApplication(AppState* app) {
     int req_inner_y = request_card.y + card_padding;
     int req_inner_w = request_card.width - 2 * card_padding;
 
-    DrawTextEx(GetUIFont(), "Request", (Vector2){req_inner_x, req_inner_y}, FONT_SIZE_LARGE, 1, app->theme.orange);
-    req_inner_y += FONT_SIZE_LARGE + 8;
-
     Rectangle method_bounds = {req_inner_x, req_inner_y, 120, 35};
     RenderMethodSelector(method_bounds, &app->selected_method, &app->theme);
 
@@ -407,18 +526,86 @@ void RenderApplication(AppState* app) {
     RenderUrlInput(url_bounds, app->url_buffer, sizeof(app->url_buffer), &app->theme);
     req_inner_y += 45;
 
-    DrawTextEx(GetUIFont(), "Headers", (Vector2){req_inner_x, req_inner_y}, FONT_SIZE_NORMAL + 2, 1, app->theme.yellow);
-    req_inner_y += FONT_SIZE_NORMAL + 8;
+    const char* tab_names[] = {"Params", "Body", "Auth", "Headers"};
+    const int tab_count = TAB_COUNT;
+    const float tab_height = 35;
+    const float tab_width = req_inner_w / tab_count;
 
-    Rectangle headers_bounds = {req_inner_x, req_inner_y, req_inner_w, 120};
-    RenderHeadersEditor(headers_bounds, app->headers, &app->header_count, &app->theme);
-    req_inner_y += 120 + 12;
+    Rectangle tab_bar = {req_inner_x, req_inner_y, req_inner_w, tab_height};
 
-    DrawTextEx(GetUIFont(), "Body", (Vector2){req_inner_x, req_inner_y}, FONT_SIZE_NORMAL + 2, 1, app->theme.blue);
-    req_inner_y += FONT_SIZE_NORMAL + 8;
+    Vector2 mouse_pos = GetMousePosition();
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouse_pos, tab_bar)) {
+        int clicked_tab = (int)((mouse_pos.x - tab_bar.x) / tab_width);
+        if (clicked_tab >= 0 && clicked_tab < tab_count) {
+            app->active_tab = (RequestTab)clicked_tab;
+        }
+    }
 
-    Rectangle body_bounds = {req_inner_x, req_inner_y, req_inner_w, request_card.y + request_card.height - req_inner_y - 60};
-    RenderBodyEditor(body_bounds, app->body_buffer, sizeof(app->body_buffer), &app->theme);
+    for (int i = 0; i < tab_count; i++) {
+        Rectangle tab_rect = {req_inner_x + i * tab_width, req_inner_y, tab_width, tab_height};
+        bool is_active = (app->active_tab == i);
+        bool is_hovered = CheckCollisionPointRec(mouse_pos, tab_rect);
+
+        Color tab_bg = is_active ? app->theme.bg2 : (is_hovered ? app->theme.bg1 : app->theme.bg0);
+        Color tab_border = is_active ? app->theme.blue : app->theme.gray;
+        Color text_color = is_active ? app->theme.fg0 : app->theme.fg1;
+
+        DrawRectangleRec(tab_rect, tab_bg);
+        if (is_active) {
+            DrawRectangle(tab_rect.x, tab_rect.y + tab_rect.height - 2, tab_rect.width, 2, app->theme.blue);
+        }
+        DrawRectangleLinesEx(tab_rect, 1, tab_border);
+
+        const char* display_text = tab_names[i];
+        char tab_text_with_count[64];
+        if (i == TAB_HEADERS && app->header_count > 0) {
+            snprintf(tab_text_with_count, sizeof(tab_text_with_count), "%s (%d)", tab_names[i], app->header_count);
+            display_text = tab_text_with_count;
+        } else if (i == TAB_BODY && strlen(app->body_buffer) > 0) {
+            snprintf(tab_text_with_count, sizeof(tab_text_with_count), "%s ●", tab_names[i]);
+            display_text = tab_text_with_count;
+        } else if (i == TAB_AUTH) {
+            snprintf(tab_text_with_count, sizeof(tab_text_with_count), "%s ●", tab_names[i]);
+            display_text = tab_text_with_count;
+        }
+
+        Vector2 text_size = MeasureTextEx(GetBoldFont(), display_text, FONT_SIZE_SMALL, 1);
+        Vector2 text_pos = {
+            tab_rect.x + (tab_rect.width - text_size.x) / 2,
+            tab_rect.y + (tab_rect.height - text_size.y) / 2
+        };
+        DrawTextEx(GetBoldFont(), display_text, text_pos, FONT_SIZE_SMALL, 1, text_color);
+    }
+
+    req_inner_y += tab_height + 10;
+
+    Rectangle content_bounds = {req_inner_x, req_inner_y, req_inner_w, request_card.y + request_card.height - req_inner_y - 60};
+
+    switch (app->active_tab) {
+        case TAB_PARAMS:
+
+            DrawRectangleRec(content_bounds, app->theme.bg1);
+            DrawRectangleLinesEx(content_bounds, 1, app->theme.gray);
+            Vector2 params_text_pos = {content_bounds.x + 10, content_bounds.y + 10};
+            DrawTextEx(GetCodeFont(), "URL Parameters (Coming Soon)", params_text_pos, FONT_SIZE_NORMAL, 1, app->theme.gray);
+            break;
+
+        case TAB_BODY:
+            RenderBodyEditor(content_bounds, app->body_buffer, sizeof(app->body_buffer), &app->theme, &app->body_type);
+            break;
+
+        case TAB_AUTH:
+
+            DrawRectangleRec(content_bounds, app->theme.bg1);
+            DrawRectangleLinesEx(content_bounds, 1, app->theme.gray);
+            Vector2 auth_text_pos = {content_bounds.x + 10, content_bounds.y + 10};
+            DrawTextEx(GetCodeFont(), "Authentication (Coming Soon)", auth_text_pos, FONT_SIZE_NORMAL, 1, app->theme.gray);
+            break;
+
+        case TAB_HEADERS:
+            RenderHeadersEditor(content_bounds, app->headers, &app->header_count, &app->theme);
+            break;
+    }
 
     float button_w = 110;
     float button_h = 38;
@@ -467,6 +654,13 @@ void RenderApplication(AppState* app) {
     if (IsMethodDropdownOpen()) {
         RenderMethodDropdownOverlay(method_bounds, &app->selected_method, &app->theme);
     }
+
+    if (IsBodyTypeDropdownOpen()) {
+
+        Rectangle body_type_bounds = {req_inner_x + 10, content_bounds.y + 10, 100, 30};
+        RenderBodyTypeDropdownOverlay(body_type_bounds, &app->body_type, &app->theme);
+    }
+
     EndDrawing();
 }
 

@@ -105,19 +105,43 @@ void InitThemeFonts(void) {
     if (theme_fonts.fonts_loaded) return;
 
     theme_fonts.regular = GetFontDefault();
+    theme_fonts.bold = GetFontDefault();
     theme_fonts.monospace = GetFontDefault();
+    theme_fonts.title = GetFontDefault();
 
     #ifdef _WIN32
+
+    Font segoe = LoadFont("C:/Windows/Fonts/segoeui.ttf");
+    if (segoe.texture.id != 0) {
+        theme_fonts.regular = segoe;
+    }
+
+    Font segoe_bold = LoadFont("C:/Windows/Fonts/segoeuib.ttf");
+    if (segoe_bold.texture.id != 0) {
+        theme_fonts.bold = segoe_bold;
+        theme_fonts.title = segoe_bold;
+    }
 
     Font consolas = LoadFont("C:/Windows/Fonts/consola.ttf");
     if (consolas.texture.id != 0) {
         theme_fonts.monospace = consolas;
     }
 
-    Font segoe = LoadFont("C:/Windows/Fonts/segoeui.ttf");
-    if (segoe.texture.id != 0) {
-        theme_fonts.regular = segoe;
+    if (theme_fonts.bold.texture.id == GetFontDefault().texture.id) {
+        Font arial_bold = LoadFont("C:/Windows/Fonts/arialbd.ttf");
+        if (arial_bold.texture.id != 0) {
+            theme_fonts.bold = arial_bold;
+            theme_fonts.title = arial_bold;
+        }
     }
+
+    if (theme_fonts.regular.texture.id == GetFontDefault().texture.id) {
+        Font calibri = LoadFont("C:/Windows/Fonts/calibri.ttf");
+        if (calibri.texture.id != 0) {
+            theme_fonts.regular = calibri;
+        }
+    }
+
     #endif
 
     theme_fonts.fonts_loaded = true;
@@ -129,8 +153,14 @@ void UnloadThemeFonts(void) {
     if (theme_fonts.regular.texture.id != GetFontDefault().texture.id) {
         UnloadFont(theme_fonts.regular);
     }
+    if (theme_fonts.bold.texture.id != GetFontDefault().texture.id) {
+        UnloadFont(theme_fonts.bold);
+    }
     if (theme_fonts.monospace.texture.id != GetFontDefault().texture.id) {
         UnloadFont(theme_fonts.monospace);
+    }
+    if (theme_fonts.title.texture.id != GetFontDefault().texture.id) {
+        UnloadFont(theme_fonts.title);
     }
 
     theme_fonts.fonts_loaded = false;
@@ -148,4 +178,18 @@ Font GetCodeFont(void) {
         InitThemeFonts();
     }
     return theme_fonts.monospace;
+}
+
+Font GetTitleFont(void) {
+    if (!theme_fonts.fonts_loaded) {
+        InitThemeFonts();
+    }
+    return theme_fonts.title;
+}
+
+Font GetBoldFont(void) {
+    if (!theme_fonts.fonts_loaded) {
+        InitThemeFonts();
+    }
+    return theme_fonts.bold;
 }

@@ -11,6 +11,7 @@
 #endif
 
 static int curl_initialized = 0;
+static int request_in_progress = 0;
 
 static HttpError last_error = {HTTP_ERROR_NONE, ""};
 
@@ -282,11 +283,21 @@ static size_t WriteHeaderCallback(void* contents, size_t size, size_t nmemb, Hea
 HttpResponse* SendHttpRequest(HttpRequest* request) {
     printf("DEBUG: SendHttpRequest called\n");
 
+    if (request_in_progress) {
+        printf("DEBUG: Another request is already in progress, rejecting new request\n");
+        SetHttpError(HTTP_ERROR_NETWORK_FAILURE, "Another request is already in progress");
+        return NULL;
+    }
+
+    request_in_progress = 1;  
+    printf("DEBUG: Request marked as in progress\n");
+
     ClearHttpError();
 
     if (!request || !request->url) {
         printf("DEBUG: Request or URL is NULL\n");
         SetHttpError(HTTP_ERROR_INVALID_URL, "Request or URL is NULL");
+        request_in_progress = 0;  
         return NULL;
     }
 
@@ -295,6 +306,7 @@ HttpResponse* SendHttpRequest(HttpRequest* request) {
     if (!ValidateUrl(request->url)) {
         printf("DEBUG: URL validation failed\n");
         SetHttpError(HTTP_ERROR_INVALID_URL, "Invalid URL format");
+        request_in_progress = 0;  
         return NULL;
     }
 
@@ -307,10 +319,13 @@ HttpResponse* SendHttpRequest(HttpRequest* request) {
     return NULL;
 #else
 
+    printf("DEBUG: Initializing CURL handle\n");
     CURL* curl = curl_easy_init();
     if (!curl) {
+        printf("DEBUG: Failed to initialize CURL handle\n");
         return NULL;
     }
+    printf("DEBUG: CURL handle initialized successfully\n");
 
     ResponseBuffer response_buffer = {0};
     response_buffer.max_size = 50 * 1024 * 1024;
@@ -334,8 +349,9 @@ HttpResponse* SendHttpRequest(HttpRequest* request) {
     curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, WriteHeaderCallback);
     curl_easy_setopt(curl, CURLOPT_HEADERDATA, &header_buffer);
 
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);  
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);  
+    printf("DEBUG: Set CURL timeouts (connect: 5s, total: 10s)\n");
 
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
@@ -355,6 +371,8 @@ HttpResponse* SendHttpRequest(HttpRequest* request) {
     }
 
     if (request->body && strlen(request->body) > 0) {
+        printf("DEBUG: Setting request body: [%s]\n", request->body);
+        printf("DEBUG: Request body length: %zu\n", strlen(request->body));
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request->body);
         curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, strlen(request->body));
     }
@@ -369,12 +387,14 @@ HttpResponse* SendHttpRequest(HttpRequest* request) {
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     }
 
+    printf("DEBUG: About to perform CURL request\n");
     double start_time = GetTime();
 
     CURLcode res = curl_easy_perform(curl);
 
     double end_time = GetTime();
     response->response_time = (end_time - start_time) * 1000.0;
+    printf("DEBUG: CURL request completed with code: %d\n", res);
 
     long response_code;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
@@ -430,6 +450,9 @@ HttpResponse* SendHttpRequest(HttpRequest* request) {
             curl_slist_free_all(headers);
         }
         curl_easy_cleanup(curl);
+
+        request_in_progress = 0;  
+        printf("DEBUG: Request failed, flag reset\n");
 
         return NULL;
     }
@@ -510,6 +533,37 @@ HttpResponse* SendHttpRequest(HttpRequest* request) {
                                 free(response->body);
                                 response->body = fixed_json;
                             }
+                        } else {
+                            printf("DEBUG: Brace count is balanced, checking for missing closing brace\n");
+
+                            if (body_len > 0 && response->body[0] == '{') {
+
+                                int last_char_pos = body_len - 1;
+                                while (last_char_pos >= 0 && 
+                                       (response->body[last_char_pos] == ' ' || 
+                                        response->body[last_char_pos] == '\t' || 
+                                        response->body[last_char_pos] == '\n' || 
+                                        response->body[last_char_pos] == '\r')) {
+                                    last_char_pos--;
+                                }
+
+                                printf("DEBUG: Last non-whitespace character: '%c' at position %d\n", 
+                                       last_char_pos >= 0 ? response->body[last_char_pos] : '?', last_char_pos);
+
+                                if (last_char_pos >= 0 && response->body[last_char_pos] != '}') {
+                                    printf("DEBUG: JSON starts with { but doesn't end with }, adding closing brace\n");
+                                    char* fixed_json = malloc(body_len + 2);
+                                    if (fixed_json) {
+                                        strcpy(fixed_json, response->body);
+                                        strcat(fixed_json, "}");
+                                        printf("DEBUG: Fallback-fixed JSON: %s\n", fixed_json);
+                                        free(response->body);
+                                        response->body = fixed_json;
+                                    }
+                                } else {
+                                    printf("DEBUG: JSON appears to end with }, no fix needed\n");
+                                }
+                            }
                         }
                     }
                 }
@@ -528,6 +582,9 @@ HttpResponse* SendHttpRequest(HttpRequest* request) {
         curl_slist_free_all(headers);
     }
     curl_easy_cleanup(curl);
+
+    request_in_progress = 0;  
+    printf("DEBUG: Request completed, flag reset\n");
 
     return response;
 #endif
