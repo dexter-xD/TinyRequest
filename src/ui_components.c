@@ -672,7 +672,7 @@ void RenderBodyEditor(Rectangle bounds, char* body_buffer, int buffer_size, Gruv
                 if (available_space > 0) {
 
                     int copy_len = (clipboard_len < available_space) ? clipboard_len : available_space;
-                    strncat(body_buffer, clipboard_text, copy_len);
+                    memcpy(body_buffer + current_len, clipboard_text, copy_len);
                     body_buffer[current_len + copy_len] = '\0';
                 }
             }

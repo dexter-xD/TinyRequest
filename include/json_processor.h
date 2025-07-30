@@ -3,7 +3,7 @@
 
 #include "raylib.h"
 #include "theme.h"
-#include <cjson.h>
+#include <cjson/cJSON.h>
 #include <stdio.h>
 
 typedef struct MemoryPool MemoryPool;

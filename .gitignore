@@ -1,2 +1,7 @@
 cmake-build-debug/
+build/
+packages/archlinux/src
+packages/archlinux/pkg
+packages/archlinux/tiny-request
+*.tar.zst
 .idea

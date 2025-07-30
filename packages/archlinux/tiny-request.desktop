@@ -1,0 +1,8 @@
+[Desktop Entry]
+Version=0.0.1
+Type=Application
+Name=TinyRequest
+Exec=/usr/local/bin/TinyRequest
+Icon=/usr/local/share/tiny-request/icon.png
+Terminal=false
+Categories=Development;Network;

@@ -63,13 +63,15 @@ void InitializeApplication(AppState* app) {
 
     InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_TITLE);
 
-    Image icon = LoadImage("assets/icon.bmp");
+    char icon_path[1024];
+    snprintf(icon_path, sizeof(icon_path), "%s/icon.png", ASSET_PATH);
+    Image icon = LoadImage(icon_path);
     if (icon.data != NULL && icon.width > 0 && icon.height > 0) {
         printf("Icon loaded: %dx%d, mipmaps=%d, format=%d\n", icon.width, icon.height, icon.mipmaps, icon.format);
         SetWindowIcon(icon);
         printf("SetWindowIcon called successfully.\n");
     } else {
-        printf("Failed to load icon: assets/icon.bmp\n");
+        printf("Failed to load icon: %s\n", icon_path);
     }
     UnloadImage(icon);
 
@@ -110,7 +112,9 @@ void InitializeApplication(AppState* app) {
     SetWindowState(FLAG_WINDOW_RESIZABLE);
     SetExitKey(KEY_NULL);
 
-    app->logo_texture = LoadTexture("assets/logo.png");
+    char logo_path[1024];
+    snprintf(logo_path, sizeof(logo_path), "%s/logo.png", ASSET_PATH);
+    app->logo_texture = LoadTexture(logo_path);
 
     printf("TinyRequest initialized successfully\n");
     printf("Window size: %dx%d\n", WINDOW_WIDTH, WINDOW_HEIGHT);

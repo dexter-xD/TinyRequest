@@ -1,0 +1,40 @@
+# Maintainer: hikari <me@metantesan.com>
+pkgname=tiny-request
+_pkgname=tiny-request
+pkgver=r5.5db76a3
+pkgrel=1
+pkgdesc=""
+arch=('x86_64')
+url="https://github.com/metantesan/tiny-request.git"
+license=('MIT')
+depends=('raylib' 'curl')
+makedepends=('git' 'gcc' 'cmake' 'make' 'raylib' 'curl' 'cjson' 'base-devel')
+source=("$pkgname::git+$url#branch=main"
+        "linux-fix.patch"
+        "tiny-request.desktop")
+sha256sums=('SKIP'
+            '96f629b1da30b6ba47cbeed8a17466909f32794aa4311bdd1edf42c2dbcb1d1b')
+
+pkgver() {
+  cd "$_pkgname"
+  (set -o pipefail
+   git describe --long --tags 2>/dev/null | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g' ||
+   printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)")
+}
+
+build() {
+  cd "$_pkgname"
+  mkdir -p build
+  cd build
+  cmake ..
+  make
+}
+
+package() {
+  cd "$_pkgname/build"
+  make DESTDIR="$pkgdir/" install
+  pwd
+  ls -ahl ../
+  ls -ahl ../../
+  install -Dm644 ../../tiny-request.desktop "$pkgdir/usr/share/applications/tiny-request.desktop"
+}
