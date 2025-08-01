@@ -46,7 +46,7 @@
 1. **Download the latest .deb package** from the [Releases page](https://github.com/dexter-xD/TinyRequest/releases)
    ```bash
    # Download the latest release (replace with actual version)
-   wget https://github.com/dexter-xD/TinyRequest/releases/download/v1.0/tinyrequest-v1.0.deb
+   wget https://github.com/dexter-xD/TinyRequest/releases/download/v1.0.4/tinyrequest-v1.0.4.deb
    ```
 
 2. **Install the package**
