@@ -4,7 +4,10 @@ set -e
 echo "Fetching TinyRequest dependencies with exact versions..."
 
 # Create externals directory if it doesn't exist
-cd ..
+# Check if we're in scripts directory and go to project root
+if [ "$(basename "$PWD")" = "scripts" ]; then
+    cd ..
+fi
 mkdir -p externals
 cd externals
 
@@ -79,6 +82,13 @@ echo "- cimgui: v1.53.1"
 echo "  └── imgui submodule: v1.92.1"
 echo "- cJSON: v1.7.15"
 echo ""
+
+# Skip system dependencies if running in GitHub Actions
+if [ "$GITHUB_ACTIONS" = "true" ]; then
+    echo "Running in GitHub Actions - skipping system dependency installation"
+    echo "System dependencies should be installed by the workflow"
+    exit 0
+fi
 
 # Detect the distribution and install system dependencies
 echo "Detecting system distribution..."
