@@ -1,4 +1,4 @@
-name: Build and Release
+name: Release
 
 on:
   push:
@@ -6,14 +6,12 @@ on:
       - 'v*.*.*'  # Triggers on version tags like v1.0.0, v1.2.3, etc.
 
 jobs:
-  build-and-release:
+  release:
     runs-on: ubuntu-latest
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      with:
-        fetch-depth: 0  # Fetch all history for proper versioning
     
     - name: Get version from tag
       id: get_version
@@ -21,9 +19,9 @@ jobs:
         VERSION=${GITHUB_REF#refs/tags/v}
         echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
         echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-        echo "Building version: $VERSION"
+        echo "Building TinyRequest version: $VERSION"
     
-    - name: Install system dependencies
+    - name: Install dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y \
@@ -38,120 +36,59 @@ jobs:
           libxinerama-dev \
           libxcursor-dev \
           libxi-dev \
-          pkg-config \
-          git
+          pkg-config
     
     - name: Fetch external dependencies
       run: |
         chmod +x scripts/fetch_dependencies.sh
         ./scripts/fetch_dependencies.sh
     
-    - name: Update version in debian control file
+    - name: Update version in debian control
       run: |
         sed -i "s/Version: .*/Version: ${{ steps.get_version.outputs.VERSION }}/" debian/DEBIAN/control
-        echo "Updated debian control version to ${{ steps.get_version.outputs.VERSION }}"
+        echo "Updated version to ${{ steps.get_version.outputs.VERSION }}"
     
-    - name: Update changelog with release date
-      run: |
-        # Update the changelog with current date
-        CURRENT_DATE=$(date -R)
-        if [ -f "debian/usr/share/doc/tinyrequest/changelog" ]; then
-          sed -i "s/Wed, 08 Jan 2025 12:00:00 +0530/$CURRENT_DATE/" debian/usr/share/doc/tinyrequest/changelog
-          echo "Updated changelog date to: $CURRENT_DATE"
-        else
-          echo "Warning: changelog file not found, skipping date update"
-        fi
-    
-    - name: Build release version
+    - name: Build and package
       run: |
         chmod +x scripts/build_and_package.sh
         ./scripts/build_and_package.sh
     
-    - name: Verify .deb package
-      run: |
-        if [ -f "tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb" ]; then
-          echo ".deb package created successfully"
-          dpkg-deb --info "tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb"
-          dpkg-deb --contents "tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb"
-        else
-          echo ".deb package not found"
-          ls -la *.deb || echo "No .deb files found"
-          exit 1
-        fi
-    
     - name: Create checksums
       run: |
         sha256sum "tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb" > "tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb.sha256"
-        md5sum "tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb" > "tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb.md5"
-        echo "Created checksums:"
-        cat "tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb.sha256"
-        cat "tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb.md5"
+        echo "Package created: tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb"
+        echo "Size: $(du -h tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb | cut -f1)"
+        echo "SHA256: $(cat tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb.sha256 | cut -d' ' -f1)"
     
-    - name: Generate release notes
-      id: release_notes
-      run: |
-        echo "RELEASE_NOTES<<EOF" >> $GITHUB_OUTPUT
-        echo "# TinyRequest ${{ steps.get_version.outputs.TAG }}" >> $GITHUB_OUTPUT
-        echo "" >> $GITHUB_OUTPUT
-        echo "## Installation" >> $GITHUB_OUTPUT
-        echo "" >> $GITHUB_OUTPUT
-        echo "### Ubuntu/Debian:" >> $GITHUB_OUTPUT
-        echo '```bash' >> $GITHUB_OUTPUT
-        echo "wget https://github.com/dexter-xD/TinyRequest/releases/download/${{ steps.get_version.outputs.TAG }}/tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb" >> $GITHUB_OUTPUT
-        echo "sudo dpkg -i tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb" >> $GITHUB_OUTPUT
-        echo "sudo apt-get install -f  # Fix any dependency issues" >> $GITHUB_OUTPUT
-        echo '```' >> $GITHUB_OUTPUT
-        echo "" >> $GITHUB_OUTPUT
-        echo "### Run the application:" >> $GITHUB_OUTPUT
-        echo '```bash' >> $GITHUB_OUTPUT
-        echo "tinyrequest" >> $GITHUB_OUTPUT
-        echo '```' >> $GITHUB_OUTPUT
-        echo "" >> $GITHUB_OUTPUT
-        echo "## Package Information" >> $GITHUB_OUTPUT
-        echo "" >> $GITHUB_OUTPUT
-        echo "- **Version**: ${{ steps.get_version.outputs.VERSION }}" >> $GITHUB_OUTPUT
-        echo "- **Architecture**: amd64" >> $GITHUB_OUTPUT
-        echo "- **Size**: $(du -h tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb | cut -f1)" >> $GITHUB_OUTPUT
-        echo "- **SHA256**: \`$(cat tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb.sha256 | cut -d' ' -f1)\`" >> $GITHUB_OUTPUT
-        echo "" >> $GITHUB_OUTPUT
-        echo "## What's New" >> $GITHUB_OUTPUT
-        echo "" >> $GITHUB_OUTPUT
-        echo "See [CHANGELOG.md](https://github.com/dexter-xD/TinyRequest/blob/main/CHANGELOG.md) for detailed changes." >> $GITHUB_OUTPUT
-        echo "" >> $GITHUB_OUTPUT
-        echo "## Issues & Support" >> $GITHUB_OUTPUT
-        echo "" >> $GITHUB_OUTPUT
-        echo "- Report bugs: [GitHub Issues](https://github.com/dexter-xD/TinyRequest/issues)" >> $GITHUB_OUTPUT
-        echo "- Feature requests: [GitHub Discussions](https://github.com/dexter-xD/TinyRequest/discussions)" >> $GITHUB_OUTPUT
-        echo "- Documentation: [README.md](https://github.com/dexter-xD/TinyRequest/blob/main/README.md)" >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
-    
-    - name: Create GitHub Release
+    - name: Create Release
       uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ steps.get_version.outputs.TAG }}
         name: "TinyRequest ${{ steps.get_version.outputs.TAG }}"
-        body: ${{ steps.release_notes.outputs.RELEASE_NOTES }}
-        draft: false
-        prerelease: false
+        body: |
+          # TinyRequest ${{ steps.get_version.outputs.TAG }}
+          
+          ## Installation
+          
+          ```bash
+          wget https://github.com/dexter-xD/TinyRequest/releases/download/${{ steps.get_version.outputs.TAG }}/tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb
+          sudo dpkg -i tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb
+          sudo apt-get install -f  # Fix any dependency issues
+          ```
+          
+          ## Run
+          
+          ```bash
+          tinyrequest
+          ```
+          
+          ## Package Info
+          
+          - **Version**: ${{ steps.get_version.outputs.VERSION }}
+          - **Architecture**: amd64
+          - **Size**: $(du -h tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb | cut -f1)
         files: |
           tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb
           tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb.sha256
-          tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb.md5
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    
-    - name: Upload build artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: tinyrequest-v${{ steps.get_version.outputs.VERSION }}
-        path: |
-          tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb
-          tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb.sha256
-          tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb.md5
-        retention-days: 90
-    
-    - name: Success notification
-      run: |
-        echo "Release ${{ steps.get_version.outputs.TAG }} created successfully!"
-        echo "Package: tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb"
-        echo "Release URL: https://github.com/dexter-xD/TinyRequest/releases/tag/${{ steps.get_version.outputs.TAG }}"
