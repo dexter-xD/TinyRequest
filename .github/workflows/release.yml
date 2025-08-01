@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*.*.*'  # Triggers on version tags like v1.0.0, v1.2.3, etc.
 
+permissions:
+  contents: write
+  packages: write
+  pull-requests: read
+
 jobs:
   release:
     runs-on: ubuntu-latest
