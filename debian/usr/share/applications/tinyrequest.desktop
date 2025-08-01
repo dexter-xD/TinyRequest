@@ -1,0 +1,14 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=TinyRequest
+Comment=Modern HTTP Client with GUI
+GenericName=HTTP Client
+Exec=tinyrequest
+Icon=tinyrequest
+Terminal=false
+StartupNotify=true
+Categories=Network;Development;WebDevelopment;
+Keywords=http;rest;api;client;request;curl;postman;
+MimeType=application/json;text/plain;
+StartupWMClass=TinyRequest

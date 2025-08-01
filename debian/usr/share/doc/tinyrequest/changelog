@@ -1,0 +1,46 @@
+tinyrequest (1.0.0) stable; urgency=medium
+
+  * Initial stable release of TinyRequest HTTP Client
+  
+  [ Core Features ]
+  * Complete HTTP method support (GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS)
+  * Advanced authentication system (API Key, Bearer Token, Basic Auth, OAuth 2.0)
+  * Request collections for organizing API endpoints
+  * Smart cookie management with automatic session handling
+  * Real-time response display with comprehensive error handling
+  
+  [ User Interface ]
+  * Modern GUI built with Dear ImGui v1.92.1 and GLFW3
+  * Clean three-tab interface (Collections, Request, Response)
+  * Font Awesome icons throughout the interface
+  * Responsive design with collapsible panels
+  * Custom theming with modern color scheme
+  
+  [ Data Management ]
+  * Auto-save functionality with configurable intervals
+  * JSON-based persistence with cJSON v1.7.15
+  * Import/Export functionality for sharing collections
+  * Legacy data migration support
+  * Comprehensive backup and recovery system
+  
+  [ Network Features ]
+  * SSL/TLS support with configurable certificate validation
+  * libcurl-based HTTP client with advanced error handling
+  * Response size limits and progress tracking
+  * Connection timeout and retry mechanisms
+  * Comprehensive URL validation
+  
+  [ Developer Features ]
+  * Built with C11 and C++17 for optimal performance
+  * Memory leak prevention and validation
+  * Cross-distribution Linux support (Ubuntu, Fedora, Arch, openSUSE)
+  * CMake-based build system with automated dependency management
+  * Comprehensive documentation and contribution guidelines
+  
+  [ System Integration ]
+  * Native Linux application with minimal dependencies
+  * Proper desktop integration with .desktop files
+  * Debian package with complete dependency management
+  * Resource usage optimization (~50MB RAM, ~10MB disk)
+
+ -- dexter-xD <https://github.com/dexter-xD>  Wed, 08 Jan 2025 12:00:00 +0530

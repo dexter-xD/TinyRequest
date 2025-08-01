@@ -1,0 +1,31 @@
+Package: tinyrequest
+Version: 1.0.0
+Section: net
+Priority: optional
+Architecture: amd64
+Depends: libglfw3 (>= 3.3), libgl1-mesa-glx, libcurl4, libcjson1, libx11-6, libxrandr2, libxinerama1, libxcursor1, libxi6
+Recommends: ca-certificates
+Suggests: curl
+Installed-Size: 10240
+Maintainer: dexter-xD <https://github.com/dexter-xD>
+Description: Lightweight HTTP client with modern GUI for Linux
+ TinyRequest is a fast, lightweight HTTP client application designed specifically
+ for Linux developers and API testers. Built with C/C++ for optimal performance,
+ it features a clean, modern interface powered by Dear ImGui.
+ .
+ Key Features:
+  * Complete HTTP method support (GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS)
+  * Advanced authentication (API Key, Bearer Token, Basic Auth, OAuth 2.0)
+  * Request collections for organizing API endpoints
+  * Smart cookie management with automatic session handling
+  * Real-time response display with syntax highlighting
+  * SSL/TLS support with configurable certificate validation
+  * Import/Export functionality for sharing request collections
+  * Minimal resource usage (~100MB RAM, ~10MB disk)
+ .
+ Perfect for developers working with REST APIs, testing web services, or
+ debugging HTTP communications. Provides a native Linux alternative to
+ web-based API testing tools.
+Homepage: https://github.com/dexter-xD/TinyRequest
+Bugs: https://github.com/dexter-xD/TinyRequest/issues
+Repository: https://github.com/dexter-xD/TinyRequest.git

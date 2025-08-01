@@ -1,772 +1,842 @@
+/**
+ * http client implementation using libcurl for tinyrequest
+ *
+ * this file provides a complete http client implementation that handles
+ * all types of http requests with proper error handling, ssl support,
+ * cookie management, and response processing. it wraps libcurl to provide
+ * a simpler interface while maintaining full functionality.
+ *
+ * the client supports all standard http methods, custom headers, request
+ * bodies, authentication, ssl certificate validation, progress callbacks,
+ * and automatic cookie handling. it includes comprehensive error handling
+ * and validation to ensure reliable network operations.
+ *
+ * response size limits and progress tracking help prevent memory issues
+ * with large downloads while providing feedback to the user interface.
+ */
+
 #include "http_client.h"
-#include "memory_manager.h"
-#include "raylib.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
+#include <stdint.h>
+#include <strings.h>
+#include <sys/time.h>
 
-#ifdef CURL_CURL_H
-#include <curl/curl.h>
-#endif
+/* global out-of-memory handler for http client */
+static void (*g_http_client_out_of_memory_handler)(const char* operation) = NULL;
 
-static int curl_initialized = 0;
-static int request_in_progress = 0;
+/* default out-of-memory handler */
+static void default_http_client_out_of_memory_handler(const char* operation) {
+    fprintf(stderr, "HTTP Client: Out of memory error during: %s\n", operation ? operation : "unknown operation");
+    fflush(stderr);
+}
 
-static HttpError last_error = {HTTP_ERROR_NONE, ""};
-
-void SetHttpError(HttpErrorCode code, const char* message) {
-    last_error.code = code;
-    if (message) {
-        strncpy(last_error.message, message, sizeof(last_error.message) - 1);
-        last_error.message[sizeof(last_error.message) - 1] = '\0';
+/* helper function to handle memory allocation failures */
+static void handle_http_client_out_of_memory(const char* operation) {
+    if (g_http_client_out_of_memory_handler) {
+        g_http_client_out_of_memory_handler(operation);
     } else {
-        last_error.message[0] = '\0';
+        default_http_client_out_of_memory_handler(operation);
     }
 }
 
-typedef struct {
-    StringBuffer* buffer;
-    size_t max_size;
-} ResponseBuffer;
-
-typedef struct {
-    char** headers;
-    int count;
-    int capacity;
-} HeaderBuffer;
-
-int InitHttpClient(void) {
-    if (curl_initialized) {
-        return 1;
+/* creates a new http client with default configuration */
+HttpClient* http_client_create(void) {
+    /* initialize libcurl globally if not already done */
+    static int curl_initialized = 0;
+    if (!curl_initialized) {
+        if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
+            return NULL;
+        }
+        curl_initialized = 1;
     }
 
-#ifdef CURL_CURL_H
-    CURLcode result = curl_global_init(CURL_GLOBAL_DEFAULT);
-    if (result != CURLE_OK) {
-        return 0;
-    }
-#endif
-
-    curl_initialized = 1;
-    return 1;
-}
-
-void CleanupHttpClient(void) {
-    if (curl_initialized) {
-#ifdef CURL_CURL_H
-        curl_global_cleanup();
-#endif
-        curl_initialized = 0;
-    }
-}
-
-int ValidateUrl(const char* url) {
-    if (!url || strlen(url) == 0) {
-        return 0;
-    }
-
-    if (strlen(url) < 7) {
-        return 0;
-    }
-
-    if (strncmp(url, "http://", 7) != 0 && strncmp(url, "https://", 8) != 0) {
-        return 0;
-    }
-
-    const char* domain_start = strstr(url, "://");
-    if (!domain_start) {
-        return 0;
-    }
-    domain_start += 3;
-
-    if (strlen(domain_start) == 0) {
-        return 0;
-    }
-
-    if (*domain_start == '/') {
-        return 0;
-    }
-
-    const char* domain_end = strchr(domain_start, '/');
-    const char* port_start = strchr(domain_start, ':');
-
-    if (port_start && domain_end && port_start > domain_end) {
-        port_start = NULL;
-    }
-
-    if (*domain_start == '.' || *domain_start == '-') {
-        return 0;
-    }
-
-    return 1;
-}
-
-HttpRequest* CreateHttpRequest(void) {
-    HttpRequest* request = malloc(sizeof(HttpRequest));
-    if (!request) {
+    /* allocate memory for httpclient structure */
+    HttpClient* client = (HttpClient*)malloc(sizeof(HttpClient));
+    if (!client) {
+        handle_http_client_out_of_memory("HTTP client creation");
         return NULL;
     }
 
-    request->url = NULL;
-    request->method = NULL;
-    request->body = NULL;
-    request->headers = NULL;
-    request->header_count = 0;
+    /* initialize the curl handle */
+    client->curl_handle = curl_easy_init();
+    if (!client->curl_handle) {
+        free(client);
+        return NULL;
+    }
 
-    return request;
+    /* clear the error buffer */
+    memset(client->error_buffer, 0, CURL_ERROR_SIZE);
+
+    /* initialize ssl verification settings (default to secure) */
+    client->ssl_verify_peer = 1;
+    client->ssl_verify_host = 2;
+
+    /* initialize large response handling settings */
+    client->max_response_size = 100 * 1024 * 1024; 
+    client->current_response_size = 0;
+    client->progress_callback = NULL;
+    client->progress_userdata = NULL;
+
+    /* set up basic libcurl configuration */
+    curl_easy_setopt(client->curl_handle, CURLOPT_ERRORBUFFER, client->error_buffer);
+    curl_easy_setopt(client->curl_handle, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(client->curl_handle, CURLOPT_MAXREDIRS, 10L);
+    curl_easy_setopt(client->curl_handle, CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(client->curl_handle, CURLOPT_CONNECTTIMEOUT, 10L);
+    curl_easy_setopt(client->curl_handle, CURLOPT_USERAGENT, "TinyRequest/1.0");
+
+    /* ssl configuration - use client settings */
+    curl_easy_setopt(client->curl_handle, CURLOPT_SSL_VERIFYPEER, (long)client->ssl_verify_peer);
+    curl_easy_setopt(client->curl_handle, CURLOPT_SSL_VERIFYHOST, (long)client->ssl_verify_host);
+
+    /* on linux, libcurl will use the system ca bundle automatically */
+
+    /* set a reasonable ssl version range */
+    curl_easy_setopt(client->curl_handle, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_2);
+
+    return client;
 }
 
-void SetHttpRequestUrl(HttpRequest* request, const char* url) {
-    if (!request || !url) {
+/* destroys an http client and frees all resources */
+void http_client_destroy(HttpClient* client) {
+    if (!client) {
         return;
     }
 
-    if (request->url) {
-        free(request->url);
+    /* clean up the curl handle */
+    if (client->curl_handle) {
+        curl_easy_cleanup(client->curl_handle);
+        client->curl_handle = NULL;
     }
 
-    request->url = malloc(strlen(url) + 1);
-    if (request->url) {
-        strcpy(request->url, url);
-    }
+    /* free the client structure */
+    free(client);
 }
 
-void SetHttpRequestMethod(HttpRequest* request, const char* method) {
-    if (!request || !method) {
-        return;
+/* structure to pass both response and client to callback */
+typedef struct {
+    Response* response;
+    HttpClient* client;
+} ResponseCallbackData;
+
+/* callback function to write response data */
+static size_t write_response_callback(void* contents, size_t size, size_t nmemb, void* userp) {
+    if (!contents || !userp) {
+        return 0; 
     }
 
-    if (request->method) {
-        free(request->method);
+    ResponseCallbackData* callback_data = (ResponseCallbackData*)userp;
+    Response* response = callback_data->response;
+    HttpClient* client = callback_data->client;
+
+    if (!response || !client) {
+        return 0; 
     }
 
-    request->method = malloc(strlen(method) + 1);
-    if (request->method) {
-        strcpy(request->method, method);
-    }
-}
-
-void SetHttpRequestBody(HttpRequest* request, const char* body) {
-    if (!request || !body) {
-        return;
+    /* check for multiplication overflow */
+    if (size > 0 && nmemb > SIZE_MAX / size) {
+        return 0; 
     }
 
-    if (request->body) {
-        free(request->body);
-    }
-
-    request->body = malloc(strlen(body) + 1);
-    if (request->body) {
-        strcpy(request->body, body);
-    }
-}
-
-void AddHttpRequestHeader(HttpRequest* request, const char* key, const char* value) {
-    if (!request || !key || !value) {
-        return;
-    }
-
-    char** new_headers = realloc(request->headers, (request->header_count + 1) * sizeof(char*));
-    if (!new_headers) {
-        SetHttpError(HTTP_ERROR_OUT_OF_MEMORY, "Failed to allocate memory for header");
-        return;
-
-    }
-
-    request->headers = new_headers;
-
-    size_t header_len = strlen(key) + strlen(value) + 3;
-    request->headers[request->header_count] = malloc(header_len);
-    if (request->headers[request->header_count]) {
-        snprintf(request->headers[request->header_count], header_len, "%s: %s", key, value);
-        request->header_count++;
-    }
-}
-
-void FreeHttpRequest(HttpRequest* request) {
-    if (!request) {
-        return;
-    }
-
-    if (request->url) {
-        free(request->url);
-    }
-
-    if (request->method) {
-        free(request->method);
-    }
-
-    if (request->body) {
-        free(request->body);
-    }
-
-    if (request->headers) {
-        for (int i = 0; i < request->header_count; i++) {
-            if (request->headers[i]) {
-                free(request->headers[i]);
-            }
-        }
-        free(request->headers);
-    }
-
-    free(request);
-}
-
-static size_t WriteResponseCallback(void* contents, size_t size, size_t nmemb, ResponseBuffer* buffer) {
     size_t realsize = size * nmemb;
 
-    if (buffer->max_size > 0 && StringBufferLength(buffer->buffer) + realsize > buffer->max_size) {
-        return 0;
-    }
+    /* use client's max response size setting */
+    size_t max_size = client->max_response_size;
 
-    if (!buffer->buffer) {
-        buffer->buffer = CreateStringBuffer(realsize > 8192 ? realsize : 8192);
-        if (!buffer->buffer) {
+    /* check if we would exceed the maximum response size */
+    if (response->body_size + realsize > max_size) {
+
+        size_t remaining = max_size - response->body_size;
+
+        if (remaining > 0) {
+
+            realsize = remaining;
+            response->is_truncated = 1;
+        } else {
+
+            response->is_truncated = 1;
             return 0;
         }
     }
 
-    char* temp_str = malloc(realsize + 1);
-    if (!temp_str) {
+    /* check for addition overflow */
+    if (response->body_size > SIZE_MAX - realsize - 1) {
+        return 0; 
+    }
+
+    /* reallocate memory for the response body with safety checks */
+    char* new_body = realloc(response->body, response->body_size + realsize + 1);
+    if (!new_body) {
+        handle_http_client_out_of_memory("response body reallocation");
+
         return 0;
     }
 
-    memcpy(temp_str, contents, realsize);
-    temp_str[realsize] = '\0';
+    response->body = new_body;
 
-    bool success = StringBufferAppend(buffer->buffer, temp_str);
-    free(temp_str);
+    /* safe memory copy with bounds checking */
+    if (realsize > 0) {
+        memcpy(&(response->body[response->body_size]), contents, realsize);
+        response->body_size += realsize;
+        response->body[response->body_size] = '\0'; 
 
-    return success ? realsize : 0;
-}
-
-static size_t WriteHeaderCallback(void* contents, size_t size, size_t nmemb, HeaderBuffer* buffer) {
-    size_t realsize = size * nmemb;
-
-    if (realsize <= 2 || strncmp((char*)contents, "HTTP/", 5) == 0) {
-        return realsize;
-    }
-
-    if (buffer->count >= buffer->capacity) {
-        int new_capacity = buffer->capacity == 0 ? 10 : buffer->capacity * 2;
-        char** new_headers = realloc(buffer->headers, new_capacity * sizeof(char*));
-        if (!new_headers) {
-            return 0;
-        }
-        buffer->headers = new_headers;
-        buffer->capacity = new_capacity;
-    }
-
-    buffer->headers[buffer->count] = malloc(realsize + 1);
-    if (!buffer->headers[buffer->count]) {
-        return 0;
-    }
-
-    memcpy(buffer->headers[buffer->count], contents, realsize);
-    buffer->headers[buffer->count][realsize] = 0;
-
-    char* header = buffer->headers[buffer->count];
-    size_t len = strlen(header);
-    while (len > 0 && (header[len-1] == '\r' || header[len-1] == '\n')) {
-        header[len-1] = 0;
-        len--;
-    }
-
-    if (strlen(header) > 0) {
-        buffer->count++;
-    } else {
-        free(buffer->headers[buffer->count]);
+        client->current_response_size = response->body_size;
     }
 
     return realsize;
 }
 
-HttpResponse* SendHttpRequest(HttpRequest* request) {
-    printf("DEBUG: SendHttpRequest called\n");
+/* progress callback for libcurl */
+static int tinyrequest_progress_callback(void* clientp, curl_off_t dltotal, curl_off_t dlnow,
+                                        curl_off_t ultotal, curl_off_t ulnow) {
+    (void)ultotal; /* unused parameter */
+    (void)ulnow;   /* unused parameter */
 
-    if (request_in_progress) {
-        printf("DEBUG: Another request is already in progress, rejecting new request\n");
-        SetHttpError(HTTP_ERROR_NETWORK_FAILURE, "Another request is already in progress");
-        return NULL;
+    if (!clientp) {
+        return 0; 
     }
 
-    request_in_progress = 1;  
-    printf("DEBUG: Request marked as in progress\n");
-    
-    ClearHttpError();
+    HttpClient* client = (HttpClient*)clientp;
 
-    if (!request || !request->url) {
-        printf("DEBUG: Request or URL is NULL\n");
-        SetHttpError(HTTP_ERROR_INVALID_URL, "Request or URL is NULL");
-        request_in_progress = 0;  
-        return NULL;
+    /* call user progress callback if set */
+    if (client->progress_callback) {
+        return client->progress_callback(client->progress_userdata, 
+                                       (double)dltotal, (double)dlnow);
     }
 
-    printf("DEBUG: Request URL: %s\n", request->url);
-    
-    if (!ValidateUrl(request->url)) {
-        printf("DEBUG: URL validation failed\n");
-        SetHttpError(HTTP_ERROR_INVALID_URL, "Invalid URL format");
-        request_in_progress = 0;  
-        return NULL;
+    return 0; /* continue download */
+}
+
+/* callback function to write response headers */
+static size_t write_header_callback(char* buffer, size_t size, size_t nitems, void* userp) {
+    if (!buffer || !userp) {
+        return 0; 
     }
 
-    printf("DEBUG: URL validation passed\n");
-
-#ifndef CURL_CURL_H
-    printf("DEBUG: CURL_CURL_H not defined - libcurl not available\n");
-    SetHttpError(HTTP_ERROR_NETWORK_FAILURE, "libcurl not available");
-
-    return NULL;
-#else
-
-    printf("DEBUG: Initializing CURL handle\n");
-    CURL* curl = curl_easy_init();
-    if (!curl) {
-        printf("DEBUG: Failed to initialize CURL handle\n");
-        return NULL;
-    }
-    printf("DEBUG: CURL handle initialized successfully\n");
-
-    ResponseBuffer response_buffer = {0};
-    response_buffer.max_size = 50 * 1024 * 1024;
-    HeaderBuffer header_buffer = {0};
-
-    HttpResponse* response = malloc(sizeof(HttpResponse));
-    if (!response) {
-        curl_easy_cleanup(curl);
-        return NULL;
+    /* check for multiplication overflow */
+    if (size > 0 && nitems > SIZE_MAX / size) {
+        return 0; 
     }
 
-    response->status_code = 0;
-    response->body = NULL;
-    response->headers = NULL;
-    response->header_count = 0;
-    response->response_time = 0.0;
+    size_t realsize = size * nitems;
+    Response* response = (Response*)userp;
 
-    curl_easy_setopt(curl, CURLOPT_URL, request->url);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteResponseCallback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_buffer);
-    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, WriteHeaderCallback);
-    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &header_buffer);
+    /* prevent processing excessively long headers */
+    if (realsize > 8192) {
+        return realsize; 
+    }
 
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);  
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);  
-    printf("DEBUG: Set CURL timeouts (connect: 5s, total: 10s)\n");
+    /* limit total number of headers to prevent memory exhaustion */
+    if (response->headers.count >= 100) {
+        return realsize; 
+    }
 
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
+    if (realsize > SIZE_MAX - 1) {
+        return realsize; 
+    }
 
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+    char* header_copy = malloc(realsize + 1);
+    if (!header_copy) {
+        handle_http_client_out_of_memory("header parsing buffer allocation");
+        return realsize; 
+    }
 
-    if (request->method) {
-        if (strcmp(request->method, "POST") == 0) {
-            curl_easy_setopt(curl, CURLOPT_POST, 1L);
-        } else if (strcmp(request->method, "PUT") == 0) {
-            curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PUT");
+    memcpy(header_copy, buffer, realsize);
+    header_copy[realsize] = '\0';
 
-        } else if (strcmp(request->method, "DELETE") == 0) {
-            curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "DELETE");
+    /* parse header line safely */
+    char* colon = strchr(header_copy, ':');
+    if (colon && realsize > 2) { 
+        *colon = '\0';
+        char* name = header_copy;
+        char* value = colon + 1;
+
+        /* trim whitespace from value */
+        while (*value == ' ' || *value == '\t') value++;
+
+        size_t value_len = strlen(value);
+        while (value_len > 0 && (value[value_len-1] == '\n' || value[value_len-1] == '\r' || 
+                                value[value_len-1] == ' ' || value[value_len-1] == '\t')) {
+            value[value_len-1] = '\0';
+            value_len--;
         }
 
+        size_t name_len = strlen(name);
+        if (name_len > 0 && name_len < 128 && value_len < 512) {
+
+            if (strcasecmp(name, "content-length") == 0) {
+                response->total_size = (size_t)strtoul(value, NULL, 10);
+            }
+
+            header_list_add(&response->headers, name, value);
+        }
     }
 
-    if (request->body && strlen(request->body) > 0) {
-        printf("DEBUG: Setting request body: %s\n", request->body);
-        printf("DEBUG: Request body length: %zu\n", strlen(request->body));
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request->body);
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, strlen(request->body));
+    free(header_copy);
+    return realsize;
+}
+
+/* sends an http request and populates the response */
+int http_client_send_request(HttpClient* client, const Request* request, Response* response) {
+    if (!client || !client->curl_handle || !request || !response) {
+        return -1; 
     }
 
+    /* clear error buffer before each request */
+    memset(client->error_buffer, 0, CURL_ERROR_SIZE);
+
+    /* validate url before sending request */
+    int url_validation = http_client_validate_url(request->url);
+    if (url_validation != 0) {
+
+        response_cleanup(response);
+        response_init(response);
+        response->status_code = 400; 
+
+        switch (url_validation) {
+            case -1:
+                strncpy(response->status_text, "Empty URL", sizeof(response->status_text) - 1);
+                break;
+            case -2:
+                strncpy(response->status_text, "URL Too Long", sizeof(response->status_text) - 1);
+                break;
+            case -3:
+                strncpy(response->status_text, "Invalid Protocol", sizeof(response->status_text) - 1);
+                break;
+            case -4:
+                strncpy(response->status_text, "No Domain", sizeof(response->status_text) - 1);
+                break;
+            case -5:
+                strncpy(response->status_text, "Invalid Characters", sizeof(response->status_text) - 1);
+                break;
+            case -6:
+                strncpy(response->status_text, "Domain Too Long", sizeof(response->status_text) - 1);
+                break;
+            case -7:
+                strncpy(response->status_text, "Invalid Domain", sizeof(response->status_text) - 1);
+                break;
+            default:
+                strncpy(response->status_text, "Invalid URL", sizeof(response->status_text) - 1);
+        }
+        response->status_text[sizeof(response->status_text) - 1] = '\0';
+        return url_validation;
+    }
+
+    /* validate request method */
+    if (strlen(request->method) == 0 || strlen(request->method) >= 16) {
+        response_cleanup(response);
+        response_init(response);
+        response->status_code = 400;
+        strncpy(response->status_text, "Invalid HTTP Method", sizeof(response->status_text) - 1);
+        response->status_text[sizeof(response->status_text) - 1] = '\0';
+        return -1;
+    }
+
+    /* reset response safely */
+    response_cleanup(response);
+    response_init(response);
+
+    /* reset client's current response size */
+    client->current_response_size = 0;
+
+    CURL* curl = client->curl_handle;
+    CURLcode res;
     struct curl_slist* headers = NULL;
-    if (request->headers && request->header_count > 0) {
-        for (int i = 0; i < request->header_count; i++) {
-            if (request->headers[i]) {
-                headers = curl_slist_append(headers, request->headers[i]);
-           }
-        }
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+    /* prepare callback data structure */
+    ResponseCallbackData callback_data = {
+        .response = response,
+        .client = client
+    };
+
+    /* set url with additional safety */
+    res = curl_easy_setopt(curl, CURLOPT_URL, request->url);
+    if (res != CURLE_OK) {
+        response->status_code = 0;
+        strncpy(response->status_text, "Failed to set URL", sizeof(response->status_text) - 1);
+        response->status_text[sizeof(response->status_text) - 1] = '\0';
+        return -1;
     }
 
-    printf("DEBUG: About to perform CURL request\n");
-    double start_time = GetTime();
+    /* apply current ssl settings */
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, (long)client->ssl_verify_peer);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, (long)client->ssl_verify_host);
 
-    CURLcode res = curl_easy_perform(curl);
+    /* set http method with enhanced validation and safety checks */
+    if (strcmp(request->method, "GET") == 0) {
+        curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
+    } else if (strcmp(request->method, "POST") == 0) {
+        curl_easy_setopt(curl, CURLOPT_POST, 1L);
+        if (request->body && request->body_size > 0) {
 
-    double end_time = GetTime();
-    response->response_time = (end_time - start_time) * 1000.0;
-    printf("DEBUG: CURL request completed with code: %d\n", res);
+            if (request->body_size > 50 * 1024 * 1024) {
+                response->status_code = 413; 
+                strncpy(response->status_text, "Request body too large", sizeof(response->status_text) - 1);
+                response->status_text[sizeof(response->status_text) - 1] = '\0';
+                return -1;
+            }
 
+            if (request->body[request->body_size - 1] != '\0' && request->body_size > 0) {
+
+            }
+            curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request->body);
+            curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)request->body_size);
+        } else {
+
+            curl_easy_setopt(curl, CURLOPT_POSTFIELDS, "");
+            curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, 0L);
+        }
+    } else if (strcmp(request->method, "PUT") == 0) {
+        curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PUT");
+        if (request->body && request->body_size > 0) {
+            if (request->body_size > 50 * 1024 * 1024) {
+                response->status_code = 413;
+                strncpy(response->status_text, "Request body too large", sizeof(response->status_text) - 1);
+                response->status_text[sizeof(response->status_text) - 1] = '\0';
+                return -1;
+            }
+            curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request->body);
+            curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)request->body_size);
+        }
+    } else if (strcmp(request->method, "DELETE") == 0) {
+        curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "DELETE");
+        if (request->body && request->body_size > 0) {
+            curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request->body);
+            curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)request->body_size);
+        }
+    } else if (strcmp(request->method, "PATCH") == 0) {
+        curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PATCH");
+        if (request->body && request->body_size > 0) {
+            curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request->body);
+            curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)request->body_size);
+        }
+    } else if (strcmp(request->method, "HEAD") == 0) {
+        curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+    } else if (strcmp(request->method, "OPTIONS") == 0) {
+        curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "OPTIONS");
+    } else {
+
+        if (strlen(request->method) > 10) {
+            response->status_code = 400;
+            strncpy(response->status_text, "Invalid custom method", sizeof(response->status_text) - 1);
+            response->status_text[sizeof(response->status_text) - 1] = '\0';
+            return -1;
+        }
+        curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, request->method);
+    }
+
+    /* set headers with error handling */
+    headers = headers_to_curl_list(&request->headers);
+    if (headers) {
+        res = curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        if (res != CURLE_OK) {
+            curl_slist_free_all(headers);
+            response->status_code = 0;
+            strncpy(response->status_text, "Failed to set headers", sizeof(response->status_text) - 1);
+            response->status_text[sizeof(response->status_text) - 1] = '\0';
+            return -1;
+        }
+    }
+
+    /* set callback functions */
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_response_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &callback_data);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, write_header_callback);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, response);
+
+    /* set progress callback if available */
+    if (client->progress_callback) {
+        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+        curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, tinyrequest_progress_callback);
+        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, client);
+    } else {
+        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1L);
+    }
+
+    /* perform the request and measure wall-clock time using gettimeofday for better compatibility */
+    struct timeval start_time, end_time;
+    gettimeofday(&start_time, NULL);
+
+    res = curl_easy_perform(curl);
+
+    gettimeofday(&end_time, NULL);
+
+    /* calculate elapsed time in milliseconds */
+    double elapsed_seconds = (end_time.tv_sec - start_time.tv_sec) +
+                            (end_time.tv_usec - start_time.tv_usec) / 1000000.0;
+    response->response_time = elapsed_seconds * 1000.0; 
+
+    /* get response code */
     long response_code;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
     response->status_code = (int)response_code;
 
+    /* set status text based on status code with better descriptions */
+    if (res == CURLE_OK) {
+        if (response->status_code >= 200 && response->status_code < 300) {
+            strncpy(response->status_text, "OK", sizeof(response->status_text) - 1);
+        } else if (response->status_code == 400) {
+            strncpy(response->status_text, "Bad Request", sizeof(response->status_text) - 1);
+        } else if (response->status_code == 401) {
+            strncpy(response->status_text, "Unauthorized", sizeof(response->status_text) - 1);
+        } else if (response->status_code == 403) {
+            strncpy(response->status_text, "Forbidden", sizeof(response->status_text) - 1);
+        } else if (response->status_code == 404) {
+            strncpy(response->status_text, "Not Found", sizeof(response->status_text) - 1);
+        } else if (response->status_code == 405) {
+            strncpy(response->status_text, "Method Not Allowed", sizeof(response->status_text) - 1);
+        } else if (response->status_code >= 400 && response->status_code < 500) {
+            strncpy(response->status_text, "Client Error", sizeof(response->status_text) - 1);
+        } else if (response->status_code == 500) {
+            strncpy(response->status_text, "Internal Server Error", sizeof(response->status_text) - 1);
+        } else if (response->status_code >= 500) {
+            strncpy(response->status_text, "Server Error", sizeof(response->status_text) - 1);
+        } else {
+            strncpy(response->status_text, "Unknown", sizeof(response->status_text) - 1);
+        }
+        response->status_text[sizeof(response->status_text) - 1] = '\0';
+    }
+
+    /* handle curl errors with user-friendly messages */
     if (res != CURLE_OK) {
 
-        HttpErrorCode error_code = HTTP_ERROR_UNKNOWN;
-        char error_msg[256];
+        response->status_code = 0; 
 
         switch (res) {
-            case CURLE_COULDNT_CONNECT:
             case CURLE_COULDNT_RESOLVE_HOST:
-            case CURLE_COULDNT_RESOLVE_PROXY:
-                error_code = HTTP_ERROR_NETWORK_FAILURE;
-                snprintf(error_msg, sizeof(error_msg), "Network connection failed: %s", curl_easy_strerror(res));
+                strncpy(response->status_text, "Could not resolve host", sizeof(response->status_text) - 1);
+                break;
+            case CURLE_COULDNT_CONNECT:
+                strncpy(response->status_text, "Connection failed", sizeof(response->status_text) - 1);
                 break;
             case CURLE_OPERATION_TIMEDOUT:
-                error_code = HTTP_ERROR_TIMEOUT;
-                snprintf(error_msg, sizeof(error_msg), "Request timeout: %s", curl_easy_strerror(res));
+                strncpy(response->status_text, "Request timeout", sizeof(response->status_text) - 1);
                 break;
             case CURLE_SSL_CONNECT_ERROR:
-            case CURLE_SSL_CERTPROBLEM:
-            case CURLE_SSL_CIPHER:
-            case CURLE_SSL_CACERT:
-                error_code = HTTP_ERROR_SSL_ERROR;
-                snprintf(error_msg, sizeof(error_msg), "SSL/TLS error: %s", curl_easy_strerror(res));
+                strncpy(response->status_text, "SSL connection error", sizeof(response->status_text) - 1);
+                break;
+            case CURLE_SSL_PEER_CERTIFICATE:
+                strncpy(response->status_text, "SSL certificate error", sizeof(response->status_text) - 1);
+                break;
+            case CURLE_TOO_MANY_REDIRECTS:
+                strncpy(response->status_text, "Too many redirects", sizeof(response->status_text) - 1);
+                break;
+            case CURLE_URL_MALFORMAT:
+                strncpy(response->status_text, "Malformed URL", sizeof(response->status_text) - 1);
                 break;
             case CURLE_OUT_OF_MEMORY:
-                error_code = HTTP_ERROR_OUT_OF_MEMORY;
-                snprintf(error_msg, sizeof(error_msg), "Out of memory: %s", curl_easy_strerror(res));
+                strncpy(response->status_text, "Out of memory", sizeof(response->status_text) - 1);
+                break;
+            case CURLE_SEND_ERROR:
+                strncpy(response->status_text, "Send error", sizeof(response->status_text) - 1);
+                break;
+            case CURLE_RECV_ERROR:
+                strncpy(response->status_text, "Receive error", sizeof(response->status_text) - 1);
+                break;
+            case CURLE_HTTP_RETURNED_ERROR:
+                strncpy(response->status_text, "HTTP error", sizeof(response->status_text) - 1);
+                break;
+            case CURLE_WRITE_ERROR:
+                strncpy(response->status_text, "Write error", sizeof(response->status_text) - 1);
                 break;
             default:
-                error_code = HTTP_ERROR_UNKNOWN;
-                snprintf(error_msg, sizeof(error_msg), "HTTP request failed: %s", curl_easy_strerror(res));
-                break;
+                snprintf(response->status_text, sizeof(response->status_text),
+                        "Network error (%d)", res);
         }
+        response->status_text[sizeof(response->status_text) - 1] = '\0';
 
-        SetHttpError(error_code, error_msg);
+        if (strlen(client->error_buffer) > 0) {
+            size_t current_len = strlen(response->status_text);
+            size_t available = sizeof(response->status_text) - current_len - 3; 
 
-        if (response_buffer.buffer) {
-
-            FreeStringBuffer(response_buffer.buffer);
-        }
-        if (header_buffer.headers) {
-            for (int i = 0; i < header_buffer.count; i++) {
-                free(header_buffer.headers[i]);
-            }
-            free(header_buffer.headers);
-        }
-        free(response);
-
-        if (headers) {
-            curl_slist_free_all(headers);
-        }
-        curl_easy_cleanup(curl);
-
-        request_in_progress = 0;  
-        printf("DEBUG: Request failed, flag reset\n");
-
-        return NULL;
-    }
-
-    if (response_buffer.buffer) {
-       response->body = StringBufferDetach(response_buffer.buffer);
-
-        if (response->body) {
-            size_t body_len = strlen(response->body);
-            printf("DEBUG: Response body length: %zu characters\n", body_len);
-            if (body_len > 0) {
-                printf("DEBUG: Response body: %.100s", response->body);
-                if (body_len > 100) {
-                    printf("...");
-                }
-                printf("\n");
-
-                if (body_len > 50) {
-                    printf("DEBUG: Last 50 chars: ...%s\n", response->body + body_len - 50);
-                } else {
-                    printf("DEBUG: Complete response: %s\n", response->body);
-                }
-
-                if (body_len > 0) {
-                    char* trimmed = response->body;
-                    while (*trimmed == ' ' || *trimmed == '\t' || *trimmed == '\n') trimmed++;
-
-                   if (*trimmed == '{' || *trimmed == '[') {
-
-                        int brace_count = 0;
-                        int bracket_count = 0;
-                        bool in_string = false;
-                        bool escaped = false;
-
-                        for (size_t i = 0; i < body_len; i++) {
-                            char c = response->body[i];
-
-                            if (in_string) {
-                                if (escaped) {
-                                    escaped = false;
-                                } else if (c == '\\') {
-                                    escaped = true;
-                                } else if (c == '"') {
-                                    in_string = false;
-                                }
-                            } else {
-                                if (c == '"') {
-                                    in_string = true;
-                                } else if (c == '{') {
-                                    brace_count++;
-                                } else if (c == '}') {
-                                    brace_count--;
-                                } else if (c == '[') {
-                                    bracket_count++;
-                                } else if (c == ']') {
-                                    bracket_count--;
-                                }
-                            }
-                        }
-                       
-                        if (brace_count > 0 || bracket_count > 0) {
-                            printf("DEBUG: JSON appears incomplete (braces: %d, brackets: %d), attempting to fix\n", brace_count, bracket_count);
-
-                            size_t fix_len = brace_count + bracket_count;
-                            char* fixed_json = malloc(body_len + fix_len + 1);
-                            if (fixed_json) {
-                                strcpy(fixed_json, response->body);
-
-                                for (int i = 0; i < bracket_count; i++) {
-                                    strcat(fixed_json, "]");
-                                }
-                                for (int i = 0; i < brace_count; i++) {
-                                    strcat(fixed_json, "}");
-                                }
-
-                                printf("DEBUG: Fixed JSON: %s\n", fixed_json);
-
-                                free(response->body);
-                                response->body = fixed_json;
-                            }
-                        } else {
-                            printf("DEBUG: Brace count is balanced, checking for missing closing brace\n");
-
-                            if (body_len > 0 && response->body[0] == '{') {
-
-                                int last_char_pos = body_len - 1;
-                                while (last_char_pos >= 0 && 
-                                       (response->body[last_char_pos] == ' ' || 
-                                        response->body[last_char_pos] == '\t' || 
-                                        response->body[last_char_pos] == '\n' || 
-                                        response->body[last_char_pos] == '\r')) {
-                                    last_char_pos--;
-                                }
-
-                                printf("DEBUG: Last non-whitespace character: '%c' at position %d\n", 
-                                       last_char_pos >= 0 ? response->body[last_char_pos] : '?', last_char_pos);
-
-                                if (last_char_pos >= 0 && response->body[last_char_pos] != '}') {
-                                    printf("DEBUG: JSON starts with { but doesn't end with }, adding closing brace\n");
-                                    char* fixed_json = malloc(body_len + 2);
-                                    if (fixed_json) {
-                                        strcpy(fixed_json, response->body);
-                                        strcat(fixed_json, "}");
-                                        printf("DEBUG: Fallback-fixed JSON: %s\n", fixed_json);
-                                        free(response->body);
-                                        response->body = fixed_json;
-                                    }
-                                } else {
-                                    printf("DEBUG: JSON appears to end with }, no fix needed\n");
-                                }
-                            }
-                        }
-                    }
-                }
+            if (available > 10) { 
+                strncat(response->status_text, ": ", available);
+                strncat(response->status_text, client->error_buffer, available - 2);
+                response->status_text[sizeof(response->status_text) - 1] = '\0';
             }
         }
-
-        FreeStringBuffer(response_buffer.buffer);
-    } else {
-        response->body = NULL;
     }
 
-    response->headers = header_buffer.headers;
-    response->header_count = header_buffer.count;
-
+    /* clean up headers */
     if (headers) {
         curl_slist_free_all(headers);
     }
-    curl_easy_cleanup(curl);
 
-    request_in_progress = 0;  
-    printf("DEBUG: Request completed, flag reset\n");
+    /* reset curl options for next request (but preserve our basic config) */
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, NULL);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, NULL);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, 0L);
+    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, NULL);
+    curl_easy_setopt(curl, CURLOPT_HTTPGET, 0L);
+    curl_easy_setopt(curl, CURLOPT_POST, 0L);
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 0L);
 
-    return response;
-#endif
+    return (res == CURLE_OK) ? 0 : -1;
 }
 
-void FreeHttpResponse(HttpResponse* response) {
-    if (!response) {
-        return;
+/* sends an http request with automatic cookie handling */
+int http_client_send_request_with_cookies(HttpClient* client, const Request* request, Response* response, Collection* collection) {
+    if (!client || !client->curl_handle || !request || !response || !collection) {
+        return -1; 
     }
 
-    if (response->body) {
-        free(response->body);
+    /* first, clean up expired cookies from the collection's cookie jar */
+    cookie_jar_cleanup_expired(&collection->cookie_jar);
+
+    /* check if the url uses https for secure cookie handling */
+    bool is_secure = (strncmp(request->url, "https://", 8) == 0);
+
+    /* build cookie header from the collection's cookie jar */
+    printf("DEBUG: Building cookie header for URL: %s (secure: %s)\n", request->url, is_secure ? "yes" : "no");
+    printf("DEBUG: Collection has %d cookies in jar\n", collection->cookie_jar.count);
+
+    for (int i = 0; i < collection->cookie_jar.count; i++) {
+        StoredCookie* cookie = &collection->cookie_jar.cookies[i];
+        printf("DEBUG: Cookie %d: %s=%s (domain: %s, path: %s, secure: %s, expired: %s)\n",
+               i, cookie->name, cookie->value, cookie->domain, cookie->path,
+               cookie->secure ? "yes" : "no",
+               cookie_jar_is_cookie_expired(cookie) ? "yes" : "no");
     }
 
-    if (response->headers) {
-        for (int i = 0; i < response->header_count; i++) {
-            if (response->headers[i]) {
-                free(response->headers[i]);
+    char* cookie_header = cookie_jar_build_cookie_header(&collection->cookie_jar, request->url, is_secure);
+
+    if (cookie_header && strlen(cookie_header) > 0) {
+        printf("DEBUG: Built cookie header: %s\n", cookie_header);
+    } else {
+        printf("DEBUG: No cookie header built (no matching cookies)\n");
+    }
+
+    /* create a modified request with the cookie header if we have cookies */
+    Request modified_request = *request; 
+    HeaderList modified_headers;
+    header_list_init(&modified_headers);
+
+    /* copy all existing headers */
+    for (int i = 0; i < request->headers.count; i++) {
+        header_list_add(&modified_headers, request->headers.headers[i].name, request->headers.headers[i].value);
+    }
+
+    /* add or update the cookie header if we have cookies to send */
+    if (cookie_header && strlen(cookie_header) > 0) {
+
+        bool cookie_header_found = false;
+        for (int i = 0; i < modified_headers.count; i++) {
+            if (strcasecmp(modified_headers.headers[i].name, "Cookie") == 0) {
+
+                strncpy(modified_headers.headers[i].value, cookie_header, sizeof(modified_headers.headers[i].value) - 1);
+                modified_headers.headers[i].value[sizeof(modified_headers.headers[i].value) - 1] = '\0';
+                cookie_header_found = true;
+                break;
             }
         }
-        free(response->headers);
+
+        if (!cookie_header_found) {
+            header_list_add(&modified_headers, "Cookie", cookie_header);
+        }
     }
 
-    free(response);
+    /* update the modified request to use the new headers */
+    modified_request.headers = modified_headers;
+
+    /* send the request using the original function */
+    int result = http_client_send_request(client, &modified_request, response);
+
+    /* after receiving the response, process any set-cookie headers */
+    if (result == 0 && response->headers.count > 0) {
+        for (int i = 0; i < response->headers.count; i++) {
+            if (strcasecmp(response->headers.headers[i].name, "Set-Cookie") == 0) {
+
+                int cookie_result = cookie_jar_parse_set_cookie(&collection->cookie_jar,
+                                                              response->headers.headers[i].value,
+                                                              request->url);
+                if (cookie_result >= 0) {
+
+                    collection_update_modified_time(collection);
+                }
+            }
+        }
+    }
+
+    /* clean up */
+    if (cookie_header) {
+        free(cookie_header);
+    }
+    header_list_cleanup(&modified_headers);
+
+    return result;
 }
 
-AsyncHttpHandle* SendHttpRequestAsync(HttpRequest* request) {
-    printf("DEBUG: SendHttpRequestAsync called\n");
-
-    if (!request || !request->url) {
-        printf("DEBUG: SendHttpRequestAsync - Request or URL is NULL\n");
-        SetHttpError(HTTP_ERROR_INVALID_URL, "Request or URL is NULL");
-        return NULL;
+/* configures ssl certificate verification settings */
+void http_client_set_ssl_verification(HttpClient* client, int verify_peer, int verify_host) {
+    if (!client || !client->curl_handle) {
+        return;
     }
 
-    printf("DEBUG: SendHttpRequestAsync - URL: %s\n", request->url);
+    client->ssl_verify_peer = verify_peer;
+    client->ssl_verify_host = verify_host;
 
-    if (!ValidateUrl(request->url)) {
-        printf("DEBUG: SendHttpRequestAsync - URL validation failed\n");
-        SetHttpError(HTTP_ERROR_INVALID_URL, "Invalid URL format");
-        return NULL;
+    /* update the curl handle with new ssl settings */
+    curl_easy_setopt(client->curl_handle, CURLOPT_SSL_VERIFYPEER, (long)verify_peer);
+    curl_easy_setopt(client->curl_handle, CURLOPT_SSL_VERIFYHOST, (long)verify_host);
+}
+
+/* validates a url for basic correctness and security */
+int http_client_validate_url(const char* url) {
+    if (!url || strlen(url) == 0) {
+        return -1; 
     }
 
-    printf("DEBUG: SendHttpRequestAsync - URL validation passed\n");
-
-    AsyncHttpHandle* handle = malloc(sizeof(AsyncHttpHandle));
-    if (!handle) {
-        printf("DEBUG: SendHttpRequestAsync - Failed to allocate async handle\n");
-        SetHttpError(HTTP_ERROR_OUT_OF_MEMORY, "Failed to allocate async handle");
-        return NULL;
+    /* check url length */
+    if (strlen(url) >= 2048) {
+        return -2; 
     }
 
+    /* check for valid protocol */
+    if (strncmp(url, "http://", 7) != 0 && strncmp(url, "https://", 8) != 0) {
+        return -3; 
+    }
 
-    printf("DEBUG: SendHttpRequestAsync - Async handle created\n");
+    /* find the start of the domain (after protocol) */
+    const char* domain_start = strstr(url, "://");
+    if (!domain_start) {
+        return -3; 
+    }
+    domain_start += 3; 
 
-    handle->curl_handle = NULL;
-    handle->request = request;
-    handle->response = NULL;
-    handle->state = ASYNC_REQUEST_PENDING;
-    handle->error_message[0] = '\0';
+    /* check if domain exists */
+    if (strlen(domain_start) == 0) {
+        return -4; 
+    }
 
-    handle->start_time = (double)clock() / CLOCKS_PER_SEC;
-    handle->cancelled = 0;
+    /* check for invalid characters in url */
+    const char* invalid_chars = " \t\n\r";
+    for (int i = 0; invalid_chars[i]; i++) {
+        if (strchr(url, invalid_chars[i])) {
+            return -5; 
+        }
+    }
 
-#ifndef CURL_CURL_H
-    printf("DEBUG: SendHttpRequestAsync - CURL_CURL_H not defined, marking as error\n");
+    /* basic domain validation - check for at least one dot or localhost */
+    const char* domain_end = strchr(domain_start, '/');
+    const char* port_start = strchr(domain_start, ':');
 
-    handle->state = ASYNC_REQUEST_ERROR;
-    strcpy(handle->error_message, "libcurl not available");
-    SetHttpError(HTTP_ERROR_NETWORK_FAILURE, "libcurl not available");
-   return handle;
-#else
-
-    handle->response = SendHttpRequest(request);
-
-    if (handle->response) {
-        handle->state = ASYNC_REQUEST_COMPLETED;
+    /* determine domain length */
+    size_t domain_len;
+    if (domain_end && port_start && port_start < domain_end) {
+        domain_len = port_start - domain_start;
+    } else if (domain_end) {
+        domain_len = domain_end - domain_start;
+    } else if (port_start) {
+        domain_len = port_start - domain_start;
     } else {
-        handle->state = ASYNC_REQUEST_ERROR;
-       
+        domain_len = strlen(domain_start);
+    }
 
-        HttpError last_err = GetLastHttpError();
+    /* check for localhost or ip address patterns */
+    if (strncmp(domain_start, "localhost", 9) == 0 ||
+        strncmp(domain_start, "127.0.0.1", 9) == 0 ||
+        strncmp(domain_start, "::1", 3) == 0) {
+        return 0; 
+    }
 
-        if (last_err.code != HTTP_ERROR_NONE) {
-            strncpy(handle->error_message, last_err.message, sizeof(handle->error_message) - 1);
-            handle->error_message[sizeof(handle->error_message) - 1] = '\0';
-        } else {
-            strcpy(handle->error_message, "HTTP request failed");
+    /* check for at least one dot in domain (basic domain validation) */
+    char domain_copy[256];
+    if (domain_len >= sizeof(domain_copy)) {
+        return -6; 
+    }
+
+    strncpy(domain_copy, domain_start, domain_len);
+    domain_copy[domain_len] = '\0';
+
+    if (!strchr(domain_copy, '.')) {
+        return -7; 
+    }
+
+    return 0; 
+}
+
+/* converts a headerlist to curl's slist format */
+struct curl_slist* headers_to_curl_list(const HeaderList* headers) {
+    if (!headers || headers->count == 0) {
+        return NULL;
+    }
+
+    struct curl_slist* curl_headers = NULL;
+
+    for (int i = 0; i < headers->count; i++) {
+
+        if (strlen(headers->headers[i].name) == 0) {
+            continue; 
         }
 
+        size_t name_len = strlen(headers->headers[i].name);
+        size_t value_len = strlen(headers->headers[i].value);
+
+        if (name_len == 0 || name_len >= 128 || value_len >= 512) {
+            continue; 
+        }
+
+        char header_line[640]; 
+        int result = snprintf(header_line, sizeof(header_line), "%s: %s",
+                headers->headers[i].name, headers->headers[i].value);
+
+        if (result < 0 || result >= (int)sizeof(header_line)) {
+            continue; 
+        }
+
+        struct curl_slist* new_headers = curl_slist_append(curl_headers, header_line);
+        if (!new_headers) {
+
+            if (curl_headers) {
+                curl_slist_free_all(curl_headers);
+            }
+            return NULL;
+        }
+        curl_headers = new_headers;
     }
 
-    return handle;
-#endif
+    return curl_headers;
 }
 
-AsyncRequestState CheckAsyncRequest(AsyncHttpHandle* handle) {
-    if (!handle) {
-        return ASYNC_REQUEST_ERROR;
+/* frees a curl slist */
+void curl_list_free(struct curl_slist* list) {
+    if (list) {
+        curl_slist_free_all(list);
     }
-
-    if (handle->cancelled && handle->state == ASYNC_REQUEST_PENDING) {
-        handle->state = ASYNC_REQUEST_CANCELLED;
-        strcpy(handle->error_message, "Request cancelled by user");
-        return handle->state;
-    }
-
-    double current_time = (double)clock() / CLOCKS_PER_SEC;
-    if (handle->state == ASYNC_REQUEST_PENDING &&
-        (current_time - handle->start_time) > 30.0) {
-        handle->state = ASYNC_REQUEST_TIMEOUT;
-        strcpy(handle->error_message, "Request timeout after 30 seconds");
-        SetHttpError(HTTP_ERROR_TIMEOUT, "Request timeout after 30 seconds");
-    }
-
-    return handle->state;
 }
 
-HttpResponse* GetAsyncResponse(AsyncHttpHandle* handle) {
-    if (!handle || handle->state != ASYNC_REQUEST_COMPLETED) {
-        return NULL;
-    }
-
-    return handle->response;
-}
-
-void CancelAsyncRequest(AsyncHttpHandle* handle) {
-    if (!handle) {
+/* sets the maximum response size limit */
+void http_client_set_max_response_size(HttpClient* client, size_t max_size) {
+    if (!client) {
         return;
     }
 
-    handle->cancelled = 1;
-
-    if (handle->state == ASYNC_REQUEST_PENDING) {
-        handle->state = ASYNC_REQUEST_CANCELLED;
-        strcpy(handle->error_message, "Request cancelled by user");
+    /* set reasonable limits (minimum 1kb, maximum 1gb) */
+    if (max_size < 1024) {
+        max_size = 1024;
+    } else if (max_size > 1024 * 1024 * 1024) {
+        max_size = 1024 * 1024 * 1024;
     }
 
-#ifdef CURL_CURL_H
-
-#endif
+    client->max_response_size = max_size;
 }
 
-void FreeAsyncHandle(AsyncHttpHandle* handle) {
-    if (!handle) {
+/* sets a progress callback for download tracking */
+void http_client_set_progress_callback(HttpClient* client,
+                                      int (*callback)(void* userdata, double total, double now),
+                                      void* userdata) {
+    if (!client) {
         return;
     }
 
-    free(handle);
+    client->progress_callback = callback;
+    client->progress_userdata = userdata;
 }
 
-HttpError GetLastHttpError(void) {
-    return last_error;
-}
-
-const char* GetHttpErrorString(HttpErrorCode code) {
-    switch (code) {
-        case HTTP_ERROR_NONE:
-            return "No error";
-        case HTTP_ERROR_INVALID_URL:
-            return "Invalid URL format";
-        case HTTP_ERROR_NETWORK_FAILURE:
-            return "Network connection failed";
-        case HTTP_ERROR_TIMEOUT:
-            return "Request timeout";
-        case HTTP_ERROR_SSL_ERROR:
-            return "SSL/TLS error";
-        case HTTP_ERROR_OUT_OF_MEMORY:
-            return "Out of memory";
-        case HTTP_ERROR_CANCELLED:
-            return "Request cancelled";
-        case HTTP_ERROR_UNKNOWN:
-        default:
-            return "Unknown error";
-    }
-}
-
-void ClearHttpError(void) {
-    last_error.code = HTTP_ERROR_NONE;
-    last_error.message[0] = '\0';
+/* sets a custom out-of-memory handler for http client operations */
+void http_client_set_out_of_memory_handler(void (*handler)(const char* operation)) {
+    g_http_client_out_of_memory_handler = handler;
 }

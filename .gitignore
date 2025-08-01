@@ -1,2 +1,19 @@
-cmake-build-debug/
-.idea
+# Build directories
+cmake-build-*/
+build/
+*.deb
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Dependencies (will be fetched by script)
+externals/
+prev/
+testing-api/
