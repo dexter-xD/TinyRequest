@@ -60,35 +60,39 @@ jobs:
         echo "Size: $(du -h tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb | cut -f1)"
         echo "SHA256: $(cat tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb.sha256 | cut -d' ' -f1)"
     
-    - name: Create Release
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: ${{ steps.get_version.outputs.TAG }}
-        name: "TinyRequest ${{ steps.get_version.outputs.TAG }}"
-        body: |
-          # TinyRequest ${{ steps.get_version.outputs.TAG }}
-          
-          ## Installation
-          
-          ```bash
-          wget https://github.com/dexter-xD/TinyRequest/releases/download/${{ steps.get_version.outputs.TAG }}/tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb
-          sudo dpkg -i tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb
-          sudo apt-get install -f  # Fix any dependency issues
-          ```
-          
-          ## Run
-          
-          ```bash
-          tinyrequest
-          ```
-          
-          ## Package Info
-          
-          - **Version**: ${{ steps.get_version.outputs.VERSION }}
-          - **Architecture**: amd64
-          - **Size**: $(du -h tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb | cut -f1)
-        files: |
-          tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb
+    - name: Create Release with GitHub CLI
+      run: |
+        # Create release notes
+        cat > release_notes.md << EOF
+        # TinyRequest ${{ steps.get_version.outputs.TAG }}
+        
+        ## Installation
+        
+        \`\`\`bash
+        wget https://github.com/dexter-xD/TinyRequest/releases/download/${{ steps.get_version.outputs.TAG }}/tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb
+        sudo dpkg -i tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb
+        sudo apt-get install -f  # Fix any dependency issues
+        \`\`\`
+        
+        ## Run
+        
+        \`\`\`bash
+        tinyrequest
+        \`\`\`
+        
+        ## Package Info
+        
+        - **Version**: ${{ steps.get_version.outputs.VERSION }}
+        - **Architecture**: amd64
+        - **Size**: $(du -h tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb | cut -f1)
+        - **SHA256**: $(cat tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb.sha256 | cut -d' ' -f1)
+        EOF
+        
+        # Create the release
+        gh release create ${{ steps.get_version.outputs.TAG }} \
+          --title "TinyRequest ${{ steps.get_version.outputs.TAG }}" \
+          --notes-file release_notes.md \
+          tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb \
           tinyrequest-v${{ steps.get_version.outputs.VERSION }}.deb.sha256
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

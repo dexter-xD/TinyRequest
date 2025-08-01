@@ -3,6 +3,8 @@ set -e
 
 echo "Fetching TinyRequest dependencies with exact versions..."
 
+# Create externals directory if it doesn't exist
+# Check if we're in scripts directory and go to project root
 if [ "$(basename "$PWD")" = "scripts" ]; then
     cd ..
 fi
