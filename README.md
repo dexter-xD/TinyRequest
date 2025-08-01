@@ -178,7 +178,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - 📧 **Contact**: [GitHub Profile](https://github.com/dexter-xD)
 
 ---
-
-<div align="center">
-  <strong>Made with ❤️ for the Linux community</strong>
-</div>
