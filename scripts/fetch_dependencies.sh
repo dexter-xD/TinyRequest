@@ -94,10 +94,15 @@ echo "Detecting system distribution..."
 
 if command -v pacman >/dev/null 2>&1; then
     # Arch Linux
-    echo "Detected Arch Linux - installing dependencies with pacman..."
-    echo "Installing: glfw, curl, cjson, libgl, libx11, libxrandr, libxinerama, libxcursor, libxi"
-    sudo pacman -Sy --noconfirm glfw curl cjson libgl libx11 libxrandr libxinerama libxcursor libxi
-    echo "Arch Linux dependencies installed successfully!"
+    if [ -n "$BUILDDIR" ]; then
+        echo "Running inside makepkg on Arch Linux - skipping system dependency installation."
+        echo "Dependencies are managed by pacman via the PKGBUILD."
+    else
+        echo "Detected Arch Linux - installing dependencies with pacman..."
+        echo "Installing: glfw, curl, cjson, libgl, libx11, libxrandr, libxinerama, libxcursor, libxi"
+        sudo pacman -Sy --noconfirm glfw curl cjson libgl libx11 libxrandr libxinerama libxcursor libxi
+        echo "Arch Linux dependencies installed successfully!"
+    fi
     
 elif command -v apt >/dev/null 2>&1; then
     # Debian/Ubuntu

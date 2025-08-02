@@ -17,3 +17,8 @@ Thumbs.db
 externals/
 prev/
 testing-api/
+
+# Archy Things
+packages/archlinux/src
+packages/archlinux/pkg
+packages/archlinux/tiny-request

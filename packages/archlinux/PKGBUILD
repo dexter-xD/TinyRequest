@@ -1,0 +1,49 @@
+# Maintainer: hikari <me@metantesan.com>
+pkgname=tiny-request
+_pkgname=tiny-request
+pkgver=1.0.4.r4.g7f0213d
+pkgrel=1
+pkgdesc=""
+arch=('x86_64')
+url="https://github.com/dexter-xD/TinyRequest.git"
+license=('MIT')
+depends=('glfw' 'curl' 'cjson' 'libgl' 'libx11' 'libxrandr' 'libxinerama' 'libxcursor' 'libxi')
+makedepends=('git' 'cmake' 'make' 'base-devel')
+source=("$pkgname::git+$url#branch=main")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  (set -o pipefail
+   git describe --long --tags 2>/dev/null | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g' ||
+   printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)")
+}
+
+prepare() {
+  cd "$_pkgname"
+  sh ./scripts/fetch_dependencies.sh
+}
+
+build() {
+  cd "$_pkgname"
+  mkdir -p build
+  cd build
+  cmake ..
+  make
+}
+
+package() {
+  cd "$_pkgname"
+
+  # Install the binary we built
+  install -Dm755 "build/bin/tinyrequest" "$pkgdir/usr/bin/tinyrequest"
+
+  # Copy the share directory from the debian package structure
+  # This includes .desktop file, docs, and other assets
+  mkdir -p "$pkgdir/usr/share/"
+  cp -a debian/usr/share/* "$pkgdir/usr/share/"
+
+  # Install a high-resolution icon. The .desktop file specifies 'Icon=tinyrequest'.
+  # We will name our icon 'tinyrequest.png' and place it in the standard hicolor theme directory.
+  # install -Dm644 "debain/usr/share/icons/hicolor/256x256/apps/tinyrequest.png" "$pkgdir/usr/share/icons/hicolor/256x256/apps/tinyrequest.png"
+}
