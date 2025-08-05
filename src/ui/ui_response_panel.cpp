@@ -11,14 +11,86 @@
 extern "C" {
 
 static void render_json_with_simple_coloring(const char* json_text, const ModernGruvboxTheme* theme) {
-    if (!json_text || !theme) {
-        return;
+    if (!json_text || !theme) return;
+
+    ImGui::TextColored(theme->fg_secondary, "%s", json_text);
+}
+
+static void render_json_value(const cJSON* node, const ModernGruvboxTheme* theme, int indent);
+
+static void render_json_key_value(const cJSON* node, const ModernGruvboxTheme* theme, int indent) {
+    if (!node || !theme) return;
+
+    if (node->string) {
+        ImGui::Indent(indent  * 16.0f);
+        ImGui::TextColored(theme->fg_primary, "\"%s\":", node->string);
+        ImGui::SameLine();
+        render_json_value(node, theme, indent);
+        ImGui::Unindent(indent * 16.0f);
     }
+    else {
+        render_json_value(node, theme, indent);
+    }
+}
 
-    ImVec4 json_color = theme->success;
-    json_color.w = 0.9f; 
+static void render_json_value(const cJSON* node, const ModernGruvboxTheme* theme, int indent) {
+    switch (node->type) {
+        case cJSON_Object: {
+            ImGui::TextColored(theme->fg_secondary, "{");
+            for (cJSON* child = node->child; child; child = child->next) {
+                render_json_key_value(child, theme, indent + 1);
+                if  (child->next) {
+                    ImGui::SameLine(0.0f, 0.0f);
+                    ImGui::TextColored(theme->fg_secondary, ",");
+                }
+            }
+            ImGui::TextColored(theme->fg_secondary, "}");
+            break;
+        }
+        case cJSON_Array: {
+            ImGui::TextColored(theme->fg_secondary, "[");
+            ImGui::Indent(indent  * 16.0f);
+            for (cJSON* child = node->child; child; child = child->next) {
+                render_json_value(child, theme, indent + 1);
+                if  (child->next) {
+                    ImGui::SameLine(0.0f, 0.0f);
+                    ImGui::TextColored(theme->fg_secondary, ",");
+                }
+            }
+            ImGui::Unindent(indent * 16.0f);
+            ImGui::TextColored(theme->fg_secondary, "]");
+            break;
+        }
+        case cJSON_String:
+            ImGui::TextColored(theme->accent_primary, "\"%s\"", node->valuestring);
+            break;
+        case cJSON_Number:
+            ImGui::TextColored(theme->info, "%g", node->valuedouble);
+            break;
+        case cJSON_True:
+            ImGui::TextColored(theme->success, "true");
+            break;
+        case cJSON_False:
+            ImGui::TextColored(theme->error, "false");
+            break;
+        case cJSON_NULL:
+            ImGui::TextColored(theme->fg_disabled, "null");
+            break;
+        default:
+            ImGui::TextColored(theme->warning, "<unknown>");
+            break;
+    }
+}
 
-    ImGui::TextColored(json_color, "%s", json_text);
+static void render_json_with_key_value_coloring(const char* json_text, const ModernGruvboxTheme* theme) {
+    if (!json_text || !theme) return;
+
+    cJSON* root = cJSON_Parse(json_text);
+    if (!root) return;
+
+    render_json_value(root, theme, 0);
+
+    cJSON_Delete(root);
 }
 
 static char* format_json_string(const char* json_string) {
@@ -344,9 +416,9 @@ void ui_response_panel_render(UIManager* ui, AppState* state) {
                             char temp_buffer[MAX_DISPLAY_SIZE + 1];
                             memcpy(temp_buffer, g_formatted_json, MAX_DISPLAY_SIZE);
                             temp_buffer[MAX_DISPLAY_SIZE] = '\0';
-                            render_json_with_simple_coloring(temp_buffer, theme);
+                            render_json_with_key_value_coloring(temp_buffer, theme);
                         } else {
-                            render_json_with_simple_coloring(g_formatted_json, theme);
+                            render_json_with_key_value_coloring(g_formatted_json, theme);
                         }
                     } else if (is_json) {
 
@@ -383,9 +455,9 @@ void ui_response_panel_render(UIManager* ui, AppState* state) {
                             char temp_buffer[MAX_DISPLAY_SIZE + 1];
                             memcpy(temp_buffer, g_formatted_json, MAX_DISPLAY_SIZE);
                             temp_buffer[MAX_DISPLAY_SIZE] = '\0';
-                            render_json_with_simple_coloring(temp_buffer, theme);
+                            render_json_with_key_value_coloring(temp_buffer, theme);
                         } else {
-                            render_json_with_simple_coloring(g_formatted_json, theme);
+                            render_json_with_key_value_coloring(g_formatted_json, theme);
                         }
                     } else if (is_json) {
 
